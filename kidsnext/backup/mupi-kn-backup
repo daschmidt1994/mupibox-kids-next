@@ -8,6 +8,7 @@
 #   mupi-kn-backup status    Einstellungen, letzte Läufe, nächster Termin
 #   mupi-kn-backup check     vollständige Prüfung aller Daten auf dem NAS
 #   mupi-kn-backup show-key  den Wiederherstellungsschlüssel noch einmal anzeigen
+#   mupi-kn-backup timer     Zeitplan aus den Einstellungen neu schreiben (nach Restore oder Update)
 # Mit --json antworten run/list/status/check für die Eltern-App in JSON.
 #
 # Ein Backup gilt erst als erfolgreich, wenn es auf dem NAS liegt UND geprüft ist: Struktur des Repositorys, ein Teil der
@@ -407,6 +408,7 @@ case "${CMD}" in
 	status) cmd_status "$@" ;;
 	check) require_root; cmd_check "$@" ;;
 	show-key) require_root; cmd_show_key ;;
-	help|--help|-h) sed -n '3,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+	timer) require_root; kb_load_conf || die "Das NAS-Backup ist noch nicht eingerichtet."; install_timer ;;
+	help|--help|-h) sed -n '3,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
 	*) die "Unbekannter Befehl: ${CMD} (setup, run, list, status, check, show-key)" 2 ;;
 esac

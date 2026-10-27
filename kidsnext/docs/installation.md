@@ -57,4 +57,8 @@ Hinweise:
 - Nach dem Neustart zeigt `sudo mupibox-kn-selftest`, ob alles da ist.
 
 ## Wiederherstellung nach SD-Defekt
-Dafür nicht den automatischen Weg nehmen: Für die Wiederherstellung braucht der Installer den NAS-Zugang und den Wiederherstellungsschlüssel. Ablauf siehe [backup-und-wiederherstellung.md](backup-und-wiederherstellung.md).
+Genauso installieren (mit demselben Hostnamen wie die alte Box). Danach per SSH:
+```
+sudo mupibox-restore
+```
+Ausführlich: [backup-und-wiederherstellung.md](backup-und-wiederherstellung.md).

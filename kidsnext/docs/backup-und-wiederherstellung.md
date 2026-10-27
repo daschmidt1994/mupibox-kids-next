@@ -76,44 +76,34 @@ Du brauchst:
 - den **Wiederherstellungsschlüssel**
 - die NAS-Daten: Adresse, Freigabe, bei SMB Benutzer und Passwort
 
-### 1. Neue microSD-Karte vorbereiten
-1. **DietPi** herunterladen: <https://dietpi.com/#download> → *Raspberry Pi* → *ARMv8 (64-bit)* für Pi 3B+, 4, 5 und Zero 2 W.
-2. **Raspberry Pi Imager** oder **balenaEtcher** auf dem PC öffnen, *Eigenes Image* wählen, die heruntergeladene Datei und die Karte auswählen und schreiben.
-3. **Nur bei WLAN statt Kabel:** Die Karte am PC erneut öffnen (Laufwerk „boot“). Dort in `dietpi.txt` setzen:
-   ```
-   AUTO_SETUP_NET_WIFI_ENABLED=1
-   ```
-   und in `dietpi-wifi.txt`:
-   ```
-   aWIFI_SSID[0]='Name deines WLANs'
-   aWIFI_KEY[0]='WLAN-Passwort'
-   ```
-   Speichern und die Karte sicher auswerfen.
+Der Weg ist derselbe wie bei einer Neuinstallation. Erst installiert sich die Box automatisch, danach holst du die Daten mit einem Befehl zurück.
 
-### 2. Offizielles DietPi starten
-1. Die Karte in die MuPiBox stecken und den Strom einschalten.
-2. Etwa 5 Minuten warten. DietPi richtet sich beim ersten Start selbst ein.
-3. Die IP-Adresse der Box findest du im Router (z. B. FRITZ!Box → *Heimnetz* → *Netzwerk*, Gerät „DietPi“).
+### 1. Neue microSD-Karte vorbereiten
+Genau wie in [installation.md](installation.md), Schritte 1–3:
+1. DietPi auf die Karte schreiben.
+2. In `dietpi-wifi.txt` das WLAN eintragen.
+3. In `dietpi.txt` die Zeilen ändern.
+
+**Wichtig:** Bei `AUTO_SETUP_NET_HOSTNAME` denselben Namen wie bei der alten Box eintragen, z. B. `mupibox-jakob`.
+
+### 2. Box starten und automatisch installieren lassen
+1. Karte in den Pi, Strom an.
+2. Warten, bis nach etwa 30–45 Minuten die (noch leere) Kinderoberfläche erscheint.
 
 ### 3. Mit der Box verbinden
-Am PC ein Terminal öffnen (Windows: *PowerShell*) und eingeben:
+Am PC ein Terminal öffnen (Windows: *PowerShell*):
 ```
-ssh root@<IP-Adresse>
+ssh root@mupibox-jakob
 ```
-- Das Passwort beim ersten Start ist `dietpi`.
-- DietPi stellt beim ersten Login ein paar Fragen. Dabei ein **neues Passwort** vergeben und die Fragen mit den Vorschlägen bestätigen.
-- Software musst du in DietPi nichts auswählen: *Install* bestätigen, fertig.
+Das Passwort ist das aus `AUTO_SETUP_GLOBAL_PASSWORD`. Geht der Name nicht, die IP-Adresse aus dem Router nehmen (FRITZ!Box → *Heimnetz* → *Netzwerk*).
 
-### 4. Installer starten
+### 4. Wiederherstellung starten
 ```
-curl -fsSL https://raw.githubusercontent.com/daschmidt1994/mupibox-kids-next/kids-next/kidsnext/install.sh | sudo bash
+sudo mupibox-restore
 ```
 
-### 5. „Wiederherstellung aus NAS-Backup“ wählen
-Im Menü den zweiten Punkt wählen und mit Enter bestätigen.
-
-### 6. NAS verbinden
-Der Installer fragt nacheinander:
+### 5. NAS verbinden
+Die Box fragt nacheinander:
 - NFS oder SMB
 - Adresse des NAS (z. B. `192.168.178.20`)
 - Freigabe:
@@ -122,21 +112,27 @@ Der Installer fragt nacheinander:
 - bei SMB Benutzer und Passwort
 - den Ordner der Backups (Standard `mupibox-backups`)
 
-### 7. Backup auswählen
+### 6. Backup auswählen
 1. **Box wählen**, z. B. `mupibox-jakob`.
 2. Den **Wiederherstellungsschlüssel** eingeben. Groß-/Kleinschreibung und Bindestriche sind egal; du hast 3 Versuche.
 3. **Backup wählen**: Das neueste steht oben, mit Datum, Version und „mit/ohne Medien“.
-4. Die Box **prüft das Backup** auf dem NAS (einige Minuten). Ist es beschädigt, bricht sie hier ab, **bevor** etwas installiert wird. Dann einfach ein älteres Backup wählen.
+4. Die Box **prüft das Backup** auf dem NAS (einige Minuten). Ist es beschädigt, bricht sie ab, **bevor** etwas verändert wird. Dann einfach ein älteres Backup wählen.
 
-### 8. Backup wiederherstellen
-1. Jetzt installiert sich die MuPiBox. Auf einem Pi 3B+ dauert das 20–40 Minuten.
-2. Danach spielt der Installer die Daten zurück. Mit Medien kann das je nach Menge deutlich länger dauern.
-3. **NetBird-Frage:**
+### 7. Backup wiederherstellen
+1. Die Daten werden zurückgespielt. Mit Medien kann das je nach Menge länger dauern.
+2. **NetBird-Frage:**
    - **Ja** nur, wenn die alte SD-Karte nicht mehr benutzt wird.
    - Sonst **Nein** und NetBird später mit einem neuen Setup-Key verbinden.
 
-### 9. Neu starten
-Die Frage „Jetzt neu starten?“ mit **Ja** beantworten. Nach dem Neustart erscheint die gewohnte Kinderoberfläche.
+### 8. Neu starten
+Die Frage „Jetzt neu starten?“ mit **J** beantworten. Nach dem Neustart erscheint die gewohnte Kinderoberfläche mit allen Hörspielen.
+
+### 9. (Alternative) Alles in einem Durchgang per SSH
+Statt Schritt 2–8: DietPi ohne die Zeile `AUTO_SETUP_CUSTOM_SCRIPT_EXEC` starten und dann aufrufen:
+```
+curl -fsSL https://raw.githubusercontent.com/daschmidt1994/mupibox-kids-next/kids-next/kidsnext/install.sh | sudo bash
+```
+Im Menü „Wiederherstellung aus NAS-Backup“ wählen. Dann wird das Backup sogar **vor** der Installation geprüft.
 
 ### 10. Prüfen, ob alles wieder da ist
 ```

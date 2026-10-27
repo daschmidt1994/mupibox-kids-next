@@ -200,6 +200,7 @@ done
 if [ "${KN_MODE}" = "restore" ]; then
 	kn_info "Daten aus dem Backup zurückspielen"
 	"${KN_RESTORE_HELPER}" apply --state "${KN_STATE_DIR}/restore-selection" || kn_die "Die Wiederherstellung ist fehlgeschlagen." "Das Protokoll prüfen; die Installation selbst ist fertig, die Wiederherstellung kann erneut gestartet werden: sudo ${KN_RESTORE_HELPER} apply"
+	kn_run "${KN_APP_DIR}/backup/mupi-kn-backup" timer
 	kn_ok "Daten wiederhergestellt"
 fi
 
