@@ -192,7 +192,12 @@ STEP=0
 
 	echo -e "XXX\n${STEP}\nPrepare MuPiBox Download ... \nXXX"
 	before=$(date +%s)
-	if [ -n "${BRANCH}" ]; then
+	# KN: Kids Next hands over its own checkout (KN_SRC, set by kidsnext/install.sh) - nothing is downloaded then
+	if [ -n "${KN_SRC}" ]; then
+		VERSION="kn-$(tr -d '[:space:]' < "${KN_SRC}/kidsnext/VERSION")"
+		MUPIBOX_URL="local:${KN_SRC}"
+		VERSION_LONG="Kids Next ${VERSION#kn-}"
+	elif [ -n "${BRANCH}" ]; then
 		# a branch: its state now, named as the update names it (DEV <branch> <date of its last commit>)
 		VERSION="${BRANCH}"
 		MUPIBOX_URL="https://github.com/${REPO}/archive/refs/heads/${BRANCH}.zip"
@@ -221,6 +226,17 @@ STEP=0
 
 	###############################################################################################
 
+	if [ -n "${KN_SRC}" ]; then
+		# KN: a copy of the checkout (the steps below move files out of MUPI_SRC and delete it at the end)
+		echo -e "XXX\n${STEP}\nCopy MuPiBox Kids Next sources... \nXXX"
+		before=$(date +%s)
+		rm -rf "${MUPI_SRC}"
+		mkdir -p "${MUPI_SRC}"
+		tar -C "${KN_SRC}" --exclude=.git --exclude=node_modules -cf - . | tar -C "${MUPI_SRC}" -xf - >&3 2>&3
+		after=$(date +%s)
+		echo -e "## Copy Kids Next sources ## finished after $((after - before)) seconds" >&3 2>&3
+		STEP=$((STEP + 2))
+	else
 	echo -e "XXX\n${STEP}\nDownload MuPiBox Version ${VERSION_LONG}... \nXXX"
 	before=$(date +%s)
 	wget -q -O /home/dietpi/mupibox.zip ${MUPIBOX_URL} >&3 2>&3
@@ -238,6 +254,7 @@ STEP=0
 	after=$(date +%s)
 	echo -e "## Unzip MuPiBox Sources ## finished after $((after - before)) seconds" >&3 2>&3
 	STEP=$((STEP + 1))
+	fi
 
 	###############################################################################################
 
@@ -288,7 +305,22 @@ STEP=0
 
 	echo -e "XXX\n${STEP}\nClean and create directories... \nXXX"
 	before=$(date +%s)
-	rm -Rf /home/dietpi/.mupibox /home/dietpi/MuPiBox >&3 2>&3
+	# KN: run again on a box with data, nothing of the user's is deleted. Before: both folders went, with the local
+	# audio books, the covers, the library (data.json) and the progress. Now only the program folder is replaced; what the
+	# user made in it is kept aside and put back after the new program is unpacked (as the update does it).
+	SKC=/home/dietpi/.mupibox/Sonos-Kids-Controller-master
+	KN_KEEP=/home/dietpi/.mupibox/userdata.kn-keep
+	if [ -d "${SKC}/server/config" ]; then
+		[ -e "${KN_KEEP}" ] && mv "${KN_KEEP}" "${KN_KEEP}.$(date +%Y%m%d-%H%M%S)" >&3 2>&3
+		mkdir -p "${KN_KEEP}/www" >&3 2>&3
+		cp -a "${SKC}/server/config" "${KN_KEEP}/config" >&3 2>&3 || { echo "## KN: user data could not be kept aside - stopped ##" >&3; exit 1; }
+		for item in cover active_theme.css rss-covers theme-data; do
+			[ -e "${SKC}/www/${item}" ] || [ -L "${SKC}/www/${item}" ] || continue
+			cp -a "${SKC}/www/${item}" "${KN_KEEP}/www/${item}" >&3 2>&3 || { echo "## KN: www/${item} could not be kept aside - stopped ##" >&3; exit 1; }
+		done
+		sudo -H -u dietpi bash -c "pm2 stop server; pm2 stop spotify-control" >&3 2>&3
+	fi
+	rm -Rf "${SKC}" >&3 2>&3
 
 	mkdir -p /home/dietpi/.mupibox/{chromium_cache,Sonos-Kids-Controller-master,spotifycontroller-main/config} >&3 2>&3
 	mkdir -p /home/dietpi/.cache/spotify >&3 2>&3
@@ -310,7 +342,12 @@ STEP=0
 	# No DietPi banner (logo, system data, "Running warm...") on the display's console while the box starts: for dietpi,
 	# and for root, who logs in there on DietPi 10 / Debian 13 (the agetty line below is not the same there)
 	touch /home/dietpi/.hushlogin /root/.hushlogin >&3 2>&3
-	mv -f ${MUPI_SRC}/config/templates/mupiboxconfig.json ${CONFIG} >&3 2>&3
+	# KN: the template only on a new box - an existing config keeps every setting, conf_update.sh adds what is missing
+	if [ -s "${CONFIG}" ] && /usr/bin/jq -e . "${CONFIG}" >/dev/null 2>&1; then
+		echo "## KN: existing ${CONFIG} kept ##" >&3
+	else
+		mv -f ${MUPI_SRC}/config/templates/mupiboxconfig.json ${CONFIG} >&3 2>&3
+	fi
 	chown root:www-data ${CONFIG} >&3 2>&3
 	chmod 775 ${CONFIG} >&3 2>&3
 	after=$(date +%s)
@@ -329,6 +366,27 @@ STEP=0
 	cp ${MUPI_SRC}/config/templates/spotifycontroller.json /home/dietpi/.mupibox/spotifycontroller-main/config/config.json >&3 2>&3
 	ln -sf /etc/mupibox/mupiboxconfig.json /home/dietpi/.mupibox/spotifycontroller-main/config/mupiboxconfig.json >&3 2>&3
 	ln -sf /var/www/images/mupif.png /home/dietpi/.mupibox/Sonos-Kids-Controller-master/www/mupi.png >&3 2>&3
+	# KN: the user's data back (the same items and exceptions as the update's "Restore Userdata")
+	if [ -d "${KN_KEEP}/config" ]; then
+		for item in "${KN_KEEP}"/config/* "${KN_KEEP}"/config/.[!.]*; do
+			[ -e "${item}" ] || continue
+			[ -L "${item}" ] && continue
+			case "$(basename "${item}")" in
+				config.json|monitor.json|active_data.json|active_resume.json|network.json) continue ;;
+			esac
+			cp -a "${item}" "${SKC}/server/config/" >&3 2>&3 || KN_KEEP_FAILED=1
+		done
+		for item in cover active_theme.css rss-covers; do
+			[ -e "${KN_KEEP}/www/${item}" ] || [ -L "${KN_KEEP}/www/${item}" ] || continue
+			rm -rf "${SKC}/www/${item}" && cp -a "${KN_KEEP}/www/${item}" "${SKC}/www/${item}" >&3 2>&3 || KN_KEEP_FAILED=1
+		done
+		[ -d "${KN_KEEP}/www/theme-data" ] && { mkdir -p "${SKC}/www/theme-data"; cp -an "${KN_KEEP}/www/theme-data/." "${SKC}/www/theme-data/" >&3 2>&3 || KN_KEEP_FAILED=1; }
+		if [ -z "${KN_KEEP_FAILED}" ] && { [ ! -e "${KN_KEEP}/config/data.json" ] || /usr/bin/jq -e . "${SKC}/server/config/data.json" >/dev/null 2>&1; }; then
+			rm -rf "${KN_KEEP}" >&3 2>&3
+		else
+			echo "## KN: user data not completely back - kept in ${KN_KEEP} ##" >&3
+		fi
+	fi
 	chown -R dietpi:dietpi /home/dietpi/.mupibox >&3 2>&3
 	after=$(date +%s)
 	echo -e "## Install frontend, backend-api, and backend-player ## finished after $((after - before)) seconds" >&3 2>&3
@@ -567,8 +625,15 @@ STEP=0
 	echo -e "XXX\n${STEP}\nSet environment... \nXXX"
 	before=$(date +%s)
 	THEME_FILE="/home/dietpi/.mupibox/Sonos-Kids-Controller-master/www/active_theme.css"
-	ln -sf /home/dietpi/MuPiBox/themes/blue.css ${THEME_FILE} >&3 2>&3
-	echo "www-data ALL=(ALL:ALL) NOPASSWD: ALL" | tee /etc/sudoers.d/www-data >&3 2>&3
+	# KN: the chosen theme stays when the setup runs again
+	[ -e "${THEME_FILE}" ] || ln -sf /home/dietpi/MuPiBox/themes/blue.css ${THEME_FILE} >&3 2>&3
+	# KN: no root rights for the web server. Only the previous PHP admin interface used them, and it stays off in Kids Next
+	# (legacy_admin.sh off below); everything the app does runs as dietpi.
+	if [ -n "${KN_SRC}" ]; then
+		rm -f /etc/sudoers.d/www-data >&3 2>&3
+	else
+		echo "www-data ALL=(ALL:ALL) NOPASSWD: ALL" | tee /etc/sudoers.d/www-data >&3 2>&3
+	fi
 	mv -f ${MUPI_SRC}/config/templates/crontab.template /tmp/crontab.template >&3 2>&3
 	chmod 755 /tmp/crontab.template >&3 2>&3
 	chown dietpi:dietpi /tmp/crontab.template >&3 2>&3
@@ -817,4 +882,6 @@ if [ -n "${MISSING}" ]; then
 	echo "Check the internet connection and start the installation again."
 	exit 1
 fi
+# KN: kidsnext/install.sh goes on with its own steps and restarts the box itself
+[ -n "${KN_NO_REBOOT}" ] && exit 0
 reboot
