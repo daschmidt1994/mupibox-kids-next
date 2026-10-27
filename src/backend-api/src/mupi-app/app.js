@@ -10263,7 +10263,7 @@ async function loadNetbird() {
 
 function netbirdTop() {
   const s = nb.status
-  const intro = `<p class="page-intro">Mit NetBird ist die Box in deinem eigenen VPN: Die Eltern-App erreichst du dann auch unterwegs über die NetBird-Adresse – ohne Portfreigabe im Router.</p>`
+  const intro = `<p class="page-intro">Mit NetBird ist die Box in deinem eigenen VPN: Die Eltern-App erreichst du dann auch unterwegs – ohne Portfreigabe im Router. Einmal verbinden genügt, die Box bleibt dauerhaft angemeldet.</p>`
   if (nb.missing || !s) {
     return [intro, `<section class="card"><h2>NetBird</h2><p class="help">Der NetBird-Baustein von MuPiBox Kids Next ist auf dieser Box nicht installiert. Ein Update (System › Updates) bringt ihn mit.</p></section>`]
   }
@@ -10277,27 +10277,33 @@ function netbirdTop() {
         <div class="btns"><button class="btn primary" id="nb-install">NetBird installieren</button></div></section>`,
     ]
   }
+  const registered = !['NeedsLogin', 'LoginFailed', 'SessionExpired', 'unknown'].includes(s.daemonStatus)
+  // never connected: nothing to show but the way to connect (NetBird's own default server and its error mean nothing here)
+  if (!registered) {
+    return [
+      intro,
+      `<section class="card"><div class="card-head"><h2>NetBird</h2><span class="chip">nicht verbunden</span></div>
+        <p class="help">Du brauchst die Adresse deines NetBird-Servers und einen Setup-Key aus dem NetBird-Dashboard. Der Key wird nur dieses eine Mal gebraucht.</p>
+        <div class="btns"><button class="btn primary" id="nb-setup">Verbinden</button></div></section>`,
+    ]
+  }
   const [cls, label] = NB_STATE[s.daemonStatus] ?? ['', s.daemonStatus || 'unbekannt']
   const connected = s.daemonStatus === 'Connected'
-  const registered = !['NeedsLogin', 'LoginFailed', 'SessionExpired', 'unknown'].includes(s.daemonStatus)
   const appUrl = s.ip ? `http://${s.ip}/app/` : ''
   return [
     intro,
     `<section class="card"><div class="card-head"><h2>NetBird</h2><span class="chip ${cls}">${esc(label)}</span></div>
       <dl class="kv">
-        <div><dt>Server</dt><dd>${esc(s.managementUrl || '–')}</dd></div>
         ${s.ip ? `<div><dt>NetBird-IP</dt><dd translate="no">${esc(s.ip)}</dd></div>` : ''}
-        ${s.fqdn ? `<div><dt>Name im VPN</dt><dd translate="no">${esc(s.fqdn)}</dd></div>` : ''}
-        ${registered ? `<div><dt>Andere Geräte</dt><dd>${s.peersConnected} von ${s.peersTotal} erreichbar</dd></div>` : ''}
-        ${s.version ? `<div><dt>Version</dt><dd>${esc(s.version)}</dd></div>` : ''}
+        ${s.fqdn ? `<div><dt>Name</dt><dd translate="no">${esc(s.fqdn.split('.')[0])}</dd></div>` : ''}
+        <div><dt>Server</dt><dd translate="no">${esc((s.managementUrl || '–').replace(/^https?:\/\//, '').replace(/:443\/?$/, ''))}</dd></div>
       </dl>
-      ${s.managementError && !connected ? `<div class="note warn">${icon('info', 18)}<span>${esc(s.managementError)}</span></div>` : ''}
-      ${connected && appUrl ? `<div class="note">${icon('info', 18)}<span>Unterwegs (mit NetBird auf dem Handy): <b translate="no">${esc(appUrl)}</b></span></div>` : ''}
-      <div class="btns">
-        <button class="btn${registered ? '' : ' primary'}" id="nb-setup">${registered ? 'Mit neuem Setup-Key verbinden' : 'Verbinden'}</button>
-        ${registered && !connected ? `<button class="btn primary" id="nb-up">Wieder verbinden</button>` : ''}
-        ${connected ? `<button class="btn" id="nb-down">Trennen</button>` : ''}
-      </div></section>`,
+      ${connected && appUrl ? `<div class="note">${icon('info', 18)}<span>Unterwegs, mit NetBird auf dem Handy: <b translate="no">${esc(appUrl)}</b></span></div>` : ''}
+      ${s.managementError && !connected ? `<div class="note warn">${icon('info', 18)}<span>Der NetBird-Server ist gerade nicht erreichbar – die Box versucht es von selbst weiter.</span></div>` : ''}
+      <div class="btns">${connected ? `<button class="btn" id="nb-down">Trennen</button>` : `<button class="btn primary" id="nb-up">Wieder verbinden</button>`}</div>
+      <details class="more"><summary>Anderen Server oder neu anmelden</summary>
+        <p class="help">Nur nötig, wenn die Box in ein anderes NetBird-Netz soll oder im Dashboard gelöscht wurde. Dafür braucht es einen neuen Setup-Key.</p>
+        <div class="btns"><button class="btn" id="nb-setup">Neu anmelden</button></div></details></section>`,
   ]
 }
 
@@ -10306,7 +10312,7 @@ function openNetbirdSetup(page) {
   openSheet(
     `<h2>NetBird verbinden</h2>
      <div class="field"><label for="nb-url">Server (Management-URL)</label><input class="input" id="nb-url" inputmode="url" autocomplete="off" placeholder="https://netbird.example.com" value="${esc(s.managementUrl && !/api\.netbird\.io|api\.wiretrustee\.com/.test(s.managementUrl) ? s.managementUrl.replace(/:443\/?$/, '') : '')}"><small>Die Adresse deines NetBird-Servers; für die NetBird-Cloud: https://api.netbird.io</small></div>
-     <div class="field"><label for="nb-key">Setup-Key</label><input class="input" id="nb-key" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"><small>Im NetBird-Dashboard unter „Setup Keys“ anlegen. Er wird nur an NetBird übergeben und nicht auf der Box gespeichert.</small></div>
+     <div class="field"><label for="nb-key">Setup-Key</label><input class="input" id="nb-key" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"><small>Im NetBird-Dashboard unter „Setup Keys“ anlegen – „Ephemeral Peers“ dabei nicht ankreuzen (sonst verschwindet die Box, wenn sie länger aus ist). Wird nur einmal gebraucht und nicht auf der Box gespeichert.</small></div>
      <div class="field"><label for="nb-host">Name im VPN</label><input class="input" id="nb-host" autocomplete="off" value="${esc(s.hostname ?? '')}"><small>Wie die Box im NetBird-Dashboard heißt.</small></div>
      <div class="btns"><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="nb-go">Verbinden</button></div>
      <p class="help" id="nb-msg" style="margin:0"></p>`,

@@ -12,7 +12,7 @@ Einstellungen › Netzwerk › **NetBird**:
 3. Danach zeigt die Seite den Status, die **NetBird-IP** und die Adresse für unterwegs (`http://<NetBird-IP>/app/`).
 
 - **Trennen** beendet die Verbindung. Die Anmeldung bleibt, **„Wieder verbinden“** braucht keinen neuen Key.
-- **„Mit neuem Setup-Key verbinden“** meldet die Box neu an, z. B. an einem anderen Server.
+- **„Anderen Server oder neu anmelden“** (eingeklappt) braucht einen neuen Setup-Key – nur nötig, wenn die Box in ein anderes NetBird-Netz soll oder im Dashboard gelöscht wurde. Sonst bleibt die Box dauerhaft angemeldet: Peers mit Setup-Key laufen nicht ab. Beim Anlegen des Keys „Ephemeral Peers“ nicht ankreuzen.
 
 ## Automatisch bei der Installation
 Liegt auf der Boot-Partition (neben `dietpi.txt`) eine Datei `mupibox-kn-netbird.txt`, verbindet der Installer die Box gleich mit:
