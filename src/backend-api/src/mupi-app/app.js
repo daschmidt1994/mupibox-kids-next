@@ -2598,7 +2598,13 @@ function openLibGroup(g) {
 
 // Starts a sync run and says what happens; used after every change of the managed content
 async function fireSync() {
-  const r = await api(`${SYNC_API}/trigger?source=webapp`, { method: 'POST' })
+  let r = await api(`${SYNC_API}/trigger?source=webapp`, { method: 'POST' })
+  // KN: an artist or album added with the Smart-Sync off stayed out of the library with only a toast - ask instead
+  if (r.body?.status === 'disabled' && (await ask('Smart-Sync einschalten?', 'Künstler-Abos und Alben kommen erst mit dem Smart-Sync in die Bibliothek. Jetzt einschalten und gleich synchronisieren?', 'Einschalten'))) {
+    const on = await api(`${SYNC_API}/config`, { method: 'POST', body: { enabled: true } })
+    if (!on.ok) return 'Smart-Sync ließ sich nicht einschalten.'
+    r = await api(`${SYNC_API}/trigger?source=webapp`, { method: 'POST' })
+  }
   const b = r.body ?? {}
   if (r.status === 202 && b.status === 'scheduled') return `Der Sync läuft in ${b.scheduledInSeconds ?? 60} s.`
   if (r.status === 202) return 'Der Sync läuft.'
