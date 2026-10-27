@@ -1,5 +1,4 @@
 #!/bin/bash
-
-echo "echo '' && echo '' && echo 'Please wait, MuPiBox-Installer starts soon...' && sleep 10" >> /home/dietpi/.bashrc
-echo "cd; curl -L https://raw.githubusercontent.com/splitti/MuPiBox/main/autosetup/autosetup.sh | sudo bash" >> /home/dietpi/.bashrc
+# KN: the automatic installation of MuPiBox Kids Next is kidsnext/firstboot/dietpi-firstboot.sh (docs: installation.md)
+echo "cd; curl -fsSL https://raw.githubusercontent.com/daschmidt1994/mupibox-kids-next/kids-next/kidsnext/install.sh | sudo bash" >> /home/dietpi/.bashrc
 reboot

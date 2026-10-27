@@ -1494,7 +1494,7 @@ async function loadNotices(root) {
   const items = []
   if (job?.phase === 'running') items.push(['sync', 'Update läuft', `${JOB_LABEL[job.kind] ?? 'Update'} – ${job.percent} %`, 'updates'])
   else if (next && next.version !== remembered('mupi-update-dismissed')) {
-    items.push(['sync', 'Neue Version verfügbar', `MuPiBox ${next.version} (${CHANNEL_LABEL[next.channel] ?? next.channel}) · Details ansehen`, 'updates', () => remember('mupi-update-dismissed', next.version)])
+    items.push(['sync', 'Neue Version verfügbar', `Kids Next ${next.version} (${CHANNEL_LABEL[next.channel] ?? next.channel}) · Details ansehen`, 'updates', () => remember('mupi-update-dismissed', next.version)])
   }
   const news = typeof n.body?.text === 'string' ? n.body.text.trim() : ''
   if (news) {
@@ -1503,7 +1503,7 @@ async function loadNotices(root) {
     const key = `${news.length}:${news.slice(0, 120)}`
     const head = new DOMParser().parseFromString(news, 'text/html').querySelector('h1,h2,h3,h4,b,strong')?.textContent?.trim()
     if (key !== remembered('mupi-news-dismissed')) {
-      items.push(['info', 'Neuigkeiten', head || 'Neues von MuPiBox', () => showNews(news), () => remember('mupi-news-dismissed', key)])
+      items.push(['info', 'Neuigkeiten', head || 'Neues von Kids Next', () => showNews(news), () => remember('mupi-news-dismissed', key)])
     }
   }
   if (band?.isConnected) drawNotices(band, items)
@@ -9141,12 +9141,12 @@ function legalTop() {
   const copyright = /^\s*Copyright\b.*$/m.exec(text)?.[0].trim() ?? ''
   const link = (href, label, cls = 'btn') => `<a class="${cls}" href="${esc(href)}" target="_blank" rel="noopener">${icon('ext', 16)}${esc(label)}</a>`
   return [
-    `<section class="card"><h2>MuPiBox</h2><p class="help">Ein freies Open-Source-Projekt für Musikboxen für Kinder.</p>
+    `<section class="card"><h2>MuPiBox Kids Next</h2><p class="help">Eine Weiterentwicklung der freien Open-Source-MuPiBox für Musikboxen für Kinder. Sie wird unabhängig vom Original aktualisiert.</p>
       ${spKv([
         ['Version', sys.version || '–'],
         copyright && ['Copyright', copyright.replace(/^Copyright\s*(\(c\)|©)?\s*/i, '')],
       ])}
-      <div class="btns">${link('https://github.com/splitti/MuPiBox', 'Projekt auf GitHub')}${link('https://mupibox.de', 'mupibox.de')}</div></section>`,
+      <div class="btns">${link('https://github.com/daschmidt1994/mupibox-kids-next', 'Kids Next auf GitHub')}${link('https://github.com/splitti/MuPiBox', 'Original-MuPiBox')}</div></section>`,
     // (its own license and the third parties in one card: beside "MuPiBox" of about the same height on a wide screen)
     `<section class="card"><h2>Lizenzen</h2>
       <h3 class="legal-h">Lizenz</h3><p class="help">${esc(name ? `MuPiBox steht unter der ${name}.` : 'Die Lizenz ließ sich nicht laden.')}</p>
@@ -10088,8 +10088,8 @@ function mountBackup(root, page) {
 /* Updates */
 
 const upd = { info: null, job: null, offline: false, showOut: false }
-const CHANNEL_LABEL = { stable: 'Stabil', beta: 'Beta', dev: 'Entwicklung' }
-const JOB_LABEL = { stable: 'MuPiBox-Update · Stabil', beta: 'MuPiBox-Update · Beta', dev: 'MuPiBox-Update · Entwicklung', os: 'Betriebssystem-Update' }
+const CHANNEL_LABEL = { stable: 'Stabil', dev: 'Entwicklung' }
+const JOB_LABEL = { stable: 'Kids-Next-Update · Stabil', dev: 'Kids-Next-Update · Entwicklung', os: 'Betriebssystem-Update' }
 const jobRunning = () => upd.job?.phase === 'running' || upd.job?.phase === 'rebooting'
 
 function cmpVersion(a, b) {
@@ -10123,9 +10123,9 @@ function updJobCard() {
   }[j.phase] ?? j.phase
   const pct = j.phase === 'running' ? j.percent : 100
   const note = upd.offline
-    ? `<div class="note">${icon('info', 18)}<span>Die Box antwortet gerade nicht. Beim MuPiBox-Update ist das normal, der Server wird ausgetauscht. Die Seite fragt weiter nach.</span></div>`
+    ? `<div class="note">${icon('info', 18)}<span>Die Box antwortet gerade nicht. Beim Kids-Next-Update ist das normal, der Server wird ausgetauscht. Die Seite fragt weiter nach.</span></div>`
     : j.phase === 'failed'
-      ? `<div class="note warn">${icon('info', 18)}<span>${j.kind === 'os' ? 'Das Betriebssystem-Update ist abgebrochen.' : 'Das Update ist abgebrochen. Die bisherige Installation ist noch da; Einstellungen und Bibliothek liegen zusätzlich in /home/dietpi/mupibox-backups.'} Details in der Ausgabe.</span></div>`
+      ? `<div class="note warn">${icon('info', 18)}<span>${j.kind === 'os' ? 'Das Betriebssystem-Update ist abgebrochen.' : 'Das Update ist abgebrochen. Einstellungen und Bibliothek bleiben erhalten (zusätzlich in /home/dietpi/mupibox-backups); das Update kann erneut gestartet werden.'} Details in der Ausgabe.</span></div>`
       : ''
   return `<section class="card wide" id="upd-job"><h2>${esc(JOB_LABEL[j.kind] ?? 'Update')}</h2>
     <div class="bar"><div class="slider-head"><b>${esc(head)}</b><span class="value-pill">${pct} %</span></div>
@@ -10139,29 +10139,32 @@ function updatesTop() {
   const i = upd.info
   const mine = installedNumber()
   const busy = jobRunning()
-  const rows = ['stable', 'beta', 'dev']
+  // KN: only Kids Next's own versions - the original MuPiBox's would replace it
+  const rows = ['stable', 'dev']
     .map((c) => {
       const rel = i?.latest?.[c]
       if (!rel) return ''
-      const same = mine && cmpVersion(rel.version, mine) === 0 && i.channel === c
-      const older = mine && cmpVersion(rel.version, mine) < 0
-      const label = same ? 'Neu installieren' : older ? 'Installieren (älter)' : 'Installieren'
-      const kind = c === 'dev' ? 'danger' : c === 'stable' && !same && !older ? 'primary' : ''
-      const ver = c === 'dev' && i.devDate ? `${rel.version} · Stand ${i.devDate}` : rel.version
+      const current = i.channel === c && !(i.update?.channel === c)
+      const older = c === 'stable' && mine && cmpVersion(rel.version, mine) < 0
+      const label = current ? 'Neu installieren' : older ? 'Installieren (älter)' : 'Installieren'
+      const kind = c === 'dev' ? 'danger' : !current && !older ? 'primary' : ''
+      const ver = c === 'dev' && rel.date ? `${rel.version} · Stand ${rel.date}` : rel.version
       return `<div class="row"><span class="lbl"><b>${esc(CHANNEL_LABEL[c])} · ${esc(ver)}</b><small>${esc(rel.info)}</small></span>
         <button class="btn ${kind}" data-upd="${c}" ${busy ? 'disabled' : ''}>${label}</button></div>`
     })
     .join('')
+  const inst = i?.installedInfo
+  const instText = [i?.installed || '–', inst?.ref === 'kids-next' ? 'Entwicklung' : '', inst?.commit ? inst.commit.slice(0, 7) : ''].filter(Boolean).join(' · ')
   return [
     updJobCard(),
-    `<section class="card"><h2>MuPiBox</h2><dl class="kv"><div><dt>Installiert</dt><dd>${esc(i?.installed || '–')}</dd></div></dl>
+    `<section class="card"><h2>MuPiBox Kids Next</h2><dl class="kv"><div><dt>Installiert</dt><dd>${esc(instText)}</dd></div></dl>
       ${i?.update ? `<div class="note">${icon('sync', 18)}<span>Neue Version ${esc(i.update.version)} verfügbar.</span></div>` : ''}
-      ${rows || `<p class="help">Die Versionen des offiziellen Repositorys ließen sich nicht laden (keine Internetverbindung?).</p>`}
-      <p class="help" style="margin:0">Aus dem offiziellen MuPiBox-Repository (splitti/MuPiBox). Die Box ist dabei 10–30 Minuten nicht nutzbar und startet danach von selbst neu. Einstellungen und Bibliothek bleiben erhalten und werden vorher zusätzlich auf der Box gesichert.</p></section>`,
-    // (the system and the backup one below the other: beside the long MuPiBox card on a wide screen, no gap between)
+      ${rows || `<p class="help">Die Versionen ließen sich nicht laden (keine Internetverbindung, oder noch keine Version veröffentlicht).</p>`}
+      <p class="help" style="margin:0">Aus dem Kids-Next-Repository (${esc(i?.repo ?? '')}) – nicht aus der originalen MuPiBox. Das Update ist dieselbe Installation wie auf einer neuen Box: Die Box ist dabei 20–40 Minuten nicht nutzbar und startet danach von selbst neu. Einstellungen, Bibliothek, WLAN und Backup-Einrichtung bleiben erhalten; Einstellungen und Bibliothek werden vorher zusätzlich auf der Box gesichert.</p></section>`,
+    // (the system and the backup one below the other: beside the long card on a wide screen, no gap between)
     `<div class="col-stack"><section class="card"><h2>Betriebssystem</h2><p class="help">Aktualisiert die Pakete des Systems (apt). Dauert auf älteren Raspberry Pis bis zu 30 Minuten; die Box läuft dabei weiter. Danach neu starten.</p>
       <div class="btns"><button class="btn" data-upd="os" ${busy ? 'disabled' : ''}>Betriebssystem aktualisieren</button></div></section>
-      <div class="card nav-card"><div class="navlist">${navRow('backup', 'Backup', 'Vorher herunterladen', 'save')}</div></div></div>`,
+      <div class="card nav-card"><div class="navlist">${navRow('backup', 'Backup', 'Vorher sichern', 'save')}</div></div></div>`,
   ]
 }
 
@@ -10175,10 +10178,10 @@ async function startUpdate(kind, page) {
     title = 'Betriebssystem aktualisieren?'
     text = 'Die Pakete des Systems werden aktualisiert. Das dauert einige Minuten bis eine halbe Stunde; die Box läuft dabei weiter. Am besten am Netzteil.'
   } else {
-    title = `MuPiBox ${rel.version} installieren?`
-    text = `${CHANNEL_LABEL[kind]}-Version aus dem offiziellen Repository. Die Box zeigt 10–30 Minuten eine Wartungsanzeige und startet danach von selbst neu. Am besten am Netzteil.`
-    if (kind === 'dev') text += ' Die Entwicklungsversion kann die Installation beschädigen.'
-    if (mine && cmpVersion(rel.version, mine) < 0) text += ` Das ist eine ältere Version als die installierte (${mine}).`
+    title = `Kids Next ${rel.version} installieren?`
+    text = `${CHANNEL_LABEL[kind]}-Version aus dem Kids-Next-Repository. Die Box ist 20–40 Minuten nicht nutzbar und startet danach von selbst neu. Am besten am Netzteil.`
+    if (kind === 'dev') text += ' Die Entwicklungsversion ist der neueste, noch nicht freigegebene Stand.'
+    if (kind === 'stable' && mine && cmpVersion(rel.version, mine) < 0) text += ` Das ist eine ältere Version als die installierte (${mine}).`
   }
   if (!(await ask(title, text, kind === 'os' ? 'Aktualisieren' : 'Installieren'))) return
   const r = await api(`${API}/updates/start`, { method: 'POST', body: { kind } })

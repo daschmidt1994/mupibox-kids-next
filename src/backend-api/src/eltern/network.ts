@@ -31,7 +31,8 @@ function detached(script: string): void {
   child.unref()
 }
 
-const DRIVER_SCRIPTS = 'https://raw.githubusercontent.com/splitti/MuPiBox/main/scripts/online'
+// KN: the driver scripts of the installed version, on the box (kidsnext/installer/base.sh)
+const DRIVER_SCRIPTS = '/opt/mupibox-kn/app/upstream/online'
 const DRIVERS: Record<string, { label: string; module: string; path: string; script: string }> = {
   RTL88X2BU: { label: 'RTL88X2BU', module: '88x2bu', path: '/home/dietpi/.driver/network/88x2bu-20210702', script: 'rtl88x2bu' },
   RTL8821AU: { label: 'RTL8821AU', module: '8821au', path: '/home/dietpi/.driver/network/8821au-20210708', script: 'rtl8821au' },
@@ -155,16 +156,10 @@ export function registerNetworkRoutes(router: Router, deps: NetworkDeps): void {
       res.status(409).json({ error: 'a driver job is running' })
       return
     }
-    // the script from the official repository, current (a shell script, else it is not run)
-    let text = ''
-    try {
-      const r = await fetch(`${DRIVER_SCRIPTS}/${action}_${d.script}.sh`, { signal: AbortSignal.timeout(20000) })
-      if (r.ok) text = await r.text()
-    } catch {
-      // no internet
-    }
+    // the script of the installed version (a shell script, else it is not run)
+    const text = await fsp.readFile(`${DRIVER_SCRIPTS}/${action}_${d.script}.sh`, 'utf8').catch(() => '')
     if (!text.startsWith('#!/bin/bash')) {
-      res.status(502).json({ error: 'driver script not loaded (no internet?)' })
+      res.status(502).json({ error: 'driver script missing' })
       return
     }
     const script = path.join(os.tmpdir(), `mupibox-driver-${action}-${d.script}.sh`)

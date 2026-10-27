@@ -23,6 +23,11 @@ kn_module_base() {
 	rm -rf "${tmp}"
 	mkdir -p "${tmp}"
 	tar -C "${KN_ROOT}/kidsnext" --exclude=docs --exclude=tests -cf - . | tar -C "${tmp}" -xf - || return 1
+	# what the app and the scripts took from the original's GitHub before (templates, the Wi-Fi driver scripts): from
+	# this version on the box - nothing is loaded from upstream any more
+	mkdir -p "${tmp}/upstream"
+	cp -a "${KN_ROOT}/config/templates" "${tmp}/upstream/templates" || return 1
+	cp -a "${KN_ROOT}/scripts/online" "${tmp}/upstream/online" || return 1
 	rm -rf "${KN_APP_DIR}.old"
 	[ -d "${KN_APP_DIR}" ] && mv "${KN_APP_DIR}" "${KN_APP_DIR}.old"
 	mv "${tmp}" "${KN_APP_DIR}" || return 1

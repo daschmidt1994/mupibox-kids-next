@@ -1,11 +1,13 @@
-// Updates of the app (admin.php's "Updates", the start page's version table and "update available"): MuPiBox from the
-// official repository (splitti/MuPiBox: version.json and update/start_mupibox_update.sh, as the admin interface), the
-// operating system with apt.
+// Updates of the app (the start page's "update available", Einstellungen › Updates): MuPiBox Kids Next from its own
+// repository (kn-repo.ts), the operating system with apt.
 //
-// Both run as a systemd unit of their own (mupibox-update), out of the server: the MuPiBox update stops and replaces
-// the server itself. The admin interface ran them inside the PHP request, and the update script pipes its progress
-// into whiptail, which quits at once without a terminal - the script's next output then ended the update after its
-// first step. Here a stand-in for whiptail writes the progress to a file the app reads.
+// KN: the original's update (splitti/MuPiBox: version.json and update/start_mupibox_update.sh) is gone - its releases
+// are made for its own image with an older Debian and would replace Kids Next. An update here is kidsnext/install.sh
+// with the new version: the same steps as the installation, settings and library stay (autosetup.sh keeps them aside).
+// Two channels: "stable" = the newest release on GitHub (its tag), "dev" = the development branch as it is now.
+//
+// Both run as a systemd unit of their own (mupibox-update), out of the server: the update stops and replaces the server
+// itself. Its progress goes to a file the app reads.
 
 import { execFile } from 'node:child_process'
 import { promises as fsp } from 'node:fs'
@@ -13,17 +15,19 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import type { Router } from 'express'
 import type { MupiboxConfig } from '../models/mupibox-config.model'
+import { KN_API, KN_BRANCH, KN_INSTALLED_JSON, KN_RAW, KN_REPO } from './kn-repo'
 import { requireCsrf, requireSession } from './middleware'
 
 export interface UpdatesDeps {
   getMupiboxConfig: () => MupiboxConfig | undefined
 }
 
-const REPO_RAW = 'https://raw.githubusercontent.com/splitti/MuPiBox/main'
 const STATE_DIR = '/var/lib/mupibox-update'
 const UNIT = 'mupibox-update'
-const CHANNELS = ['stable', 'beta', 'dev'] as const
+const CHANNELS = ['stable', 'dev'] as const
 type Channel = (typeof CHANNELS)[number]
+/** a tag or branch as GitHub and install.sh --ref take it */
+const REF_RE = /^[A-Za-z0-9._/-]{1,100}$/
 
 function run(cmd: string, args: string[], timeoutMs = 30000): Promise<{ ok: boolean; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
@@ -33,17 +37,18 @@ function run(cmd: string, args: string[], timeoutMs = 30000): Promise<{ ok: bool
   })
 }
 
-// $1 = stable | beta | dev | os. Its state for the app in state (key=value), progress (percent, tab, step) and
-// output.txt; they stay after the restart, so the app can tell how the last update went.
+// $1 = stable | dev | os, $2 = the tag or branch (stable, dev). Its state for the app in state (key=value), progress
+// (percent, tab, step) and output.txt; they stay after the restart, so the app can tell how the last update went.
 export const RUN_SH = `#!/bin/bash
-# The app's update (backend-api eltern/updates.ts), run as the systemd unit ${UNIT}: $1 = stable | beta | dev | os
+# The app's update (backend-api eltern/updates.ts), run as the systemd unit ${UNIT}: $1 = stable | dev | os, $2 = ref
 D=${STATE_DIR}
 KIND="$1"
+REF="$2"
 PHASE=running
 STARTED=$(date +%s)
 FINISHED=
 write_state() {
-	printf 'kind=%s\\nphase=%s\\nstarted=%s\\nfinished=%s\\n' "$KIND" "$PHASE" "$STARTED" "$FINISHED" > "$D/state.tmp" && mv "$D/state.tmp" "$D/state"
+	printf 'kind=%s\\nref=%s\\nphase=%s\\nstarted=%s\\nfinished=%s\\n' "$KIND" "$REF" "$PHASE" "$STARTED" "$FINISHED" > "$D/state.tmp" && mv "$D/state.tmp" "$D/state"
 }
 finish() {
 	PHASE="$1"
@@ -78,9 +83,13 @@ if [ "$KIND" = "os" ]; then
 	exit 0
 fi
 
+case "$REF" in
+	'' | *[!A-Za-z0-9._/-]*) echo "Invalid version: $REF"; finish failed; exit 0 ;;
+esac
+
 progress 1 "Download"
-if ! curl -fsSL --retry 3 --retry-delay 3 -m 120 -o "$D/start_mupibox_update.sh" "${REPO_RAW}/update/start_mupibox_update.sh" || ! bash -n "$D/start_mupibox_update.sh"; then
-	echo "The update script could not be downloaded - nothing was changed."
+if ! curl -fsSL --retry 3 --retry-delay 3 -m 120 -o "$D/install.sh" "https://raw.githubusercontent.com/${KN_REPO}/$REF/kidsnext/install.sh" || ! bash -n "$D/install.sh"; then
+	echo "The installer could not be downloaded - nothing was changed."
 	[ "$IDLE_WAS_ACTIVE" = "active" ] && systemctl start mupi_idle_shutdown
 	finish failed
 	exit 0
@@ -94,91 +103,124 @@ zip -q -r "$BACKUP" /etc/mupibox/mupiboxconfig.json /home/dietpi/.mupibox/Sonos-
 chown -R dietpi:dietpi /home/dietpi/mupibox-backups
 ls -1t /home/dietpi/mupibox-backups/before-update-*.zip 2>/dev/null | tail -n +4 | xargs -r rm -f
 
-cd /home/dietpi
-PATH="$D/bin:$PATH" bash "$D/start_mupibox_update.sh" "$KIND"
-RC=$?
-# done: the script moves its log away at its very end (/boot/mupibox_update.log); an aborted run leaves it there
-if [ "$RC" = "0" ] && [ ! -e /boot/mupibox_update.log ] && [ "$(cut -f1 "$D/progress")" = "100" ]; then
+# The installer, as on a new box but without questions and without its own restart. Its steps for the progress:
+# its headlines (==>) and the installation's (indented), the latter between 10 and 85 %.
+cd /root
+PCT=3
+bash "$D/install.sh" --new --yes --no-reboot --ref "$REF" 2>&1 | while IFS= read -r line; do
+	printf '%s\\n' "$line"
+	text=$(printf '%s' "$line" | sed 's/\\x1b\\[[0-9;]*m//g')
+	case "$text" in
+		'==> MuPiBox installieren'*) PCT=10 ;;
+		'==> Kids-Next'* | '==> NAS-Backup'*) [ "$PCT" -lt 86 ] && PCT=86 ;;
+		'==> Installation prüfen'*) PCT=95 ;;
+		'==> '*) [ "$PCT" -lt 9 ] && PCT=$((PCT + 1)) ;;
+		'    '[!\\ ]*) [ "$PCT" -ge 10 ] && [ "$PCT" -lt 85 ] && PCT=$((PCT + 1)) ;;
+		*) continue ;;
+	esac
+	progress "$PCT" "$(printf '%s' "$text" | sed 's/^==> //; s/^ *//' | cut -c1-120)"
+done
+RC=\${PIPESTATUS[0]}
+if [ "$RC" = "0" ]; then
+	progress 100 "OK"
 	finish rebooting
 	sleep 10
 	systemctl reboot
-elif [ -e /tmp/mupibox-update-nostart ]; then
-	# the update could not go back to the previous installation completely (fail_update ... nostart): nothing is
-	# started on an installation in that state - the next start of the box finishes the way back before pm2 starts
-	# the server and the player (mupi_update_recover.service)
-	echo "The update stopped, and the way back to the previous version is not complete - restart the box."
-	finish failed
-	[ "$IDLE_WAS_ACTIVE" = "active" ] && systemctl start mupi_idle_shutdown
 else
+	echo "The update stopped (exit code $RC). Settings and library stay; the installer can be started again."
 	finish failed
-	# the display was ended by the update script: back to the box's normal state
 	[ "$IDLE_WAS_ACTIVE" = "active" ] && systemctl start mupi_idle_shutdown
-	# (the update stops the server early on; an aborted run may leave it stopped)
+	# (the installation stops the server and the display on the way; an aborted run may leave them stopped)
 	sudo -H -u dietpi bash -c "pm2 start server"
 	sudo -i -u dietpi /usr/local/bin/mupibox/restart_kiosk.sh
 fi
 `
 
-// stands in for whiptail --gauge (no terminal): "XXX / percent / step / XXX" blocks from the update script
-export const WHIPTAIL_SH = `#!/bin/bash
-# stand-in for whiptail --gauge during the app's update (backend-api eltern/updates.ts): the progress to a file
-P=${STATE_DIR}/progress
-while IFS= read -r line; do
-	[ "$line" = "XXX" ] || continue
-	IFS= read -r pct
-	# the step: up to the closing XXX
-	text=""
-	while IFS= read -r l && [ "$l" != "XXX" ]; do text="\${text:+$text }$l"; done
-	case "$pct" in '' | *[!0-9]*) pct=$(cut -f1 "$P" 2>/dev/null) ;; esac
-	printf '%s\\t%s\\n' "\${pct:-0}" "$text" > "$P"
-done
-exit 0
-`
-
-interface Release {
+export interface Release {
   version: string
+  /** the tag (stable) or branch (dev) install.sh takes */
+  ref: string
   info: string
+  /** dev: the commit and its day */
+  commit?: string
+  date?: string
 }
-let versionCache: { at: number; json: Record<string, unknown> } | null = null
-let devDateCache: { at: number; date: string } | null = null
+export interface Installed {
+  version: string | null
+  ref: string | null
+  commit: string | null
+  date: string | null
+}
 
-export async function officialVersions(): Promise<Record<Channel, Release | null> | null> {
-  if (!versionCache || Date.now() - versionCache.at > 3600_000) {
+let stableCache: { at: number; release: Release | null } | null = null
+let devCache: { at: number; release: Release | null } | null = null
+const HOUR = 3600_000
+
+async function getJson(url: string, accept = 'application/vnd.github+json'): Promise<unknown> {
+  const r = await fetch(url, { signal: AbortSignal.timeout(8000), headers: { Accept: accept } })
+  if (!r.ok) throw new Error(String(r.status))
+  return r.json()
+}
+
+/** The newest release (stable) and the development branch now (dev); null where GitHub did not answer. */
+export async function knVersions(): Promise<Record<Channel, Release | null>> {
+  if (!stableCache || Date.now() - stableCache.at > HOUR) {
     try {
-      const r = await fetch(`${REPO_RAW}/version.json`, { signal: AbortSignal.timeout(8000) })
-      if (r.ok) versionCache = { at: Date.now(), json: (await r.json()) as Record<string, unknown> }
-    } catch {
-      // no internet: the last answer, if any
+      const rel = (await getJson(`${KN_API}/releases/latest`)) as { tag_name?: string; name?: string; body?: string }
+      const tag = String(rel.tag_name ?? '')
+      stableCache = {
+        at: Date.now(),
+        release: REF_RE.test(tag)
+          ? { version: tag.replace(/^v/, ''), ref: tag, info: String(rel.name || rel.body || '').slice(0, 300) }
+          : null,
+      }
+    } catch (e) {
+      // 404: no release yet; else no internet - the last answer, if any
+      if ((e as Error).message === '404') stableCache = { at: Date.now(), release: null }
     }
   }
-  const release = (versionCache?.json?.release ?? null) as Record<string, { version?: string; releaseinfo?: string }[]> | null
-  if (!release) return null
-  const latest = (c: Channel): Release | null => {
-    const list = Array.isArray(release[c]) ? release[c] : []
-    const last = list[list.length - 1]
-    return last?.version ? { version: String(last.version), info: String(last.releaseinfo ?? '') } : null
-  }
-  return { stable: latest('stable'), beta: latest('beta'), dev: latest('dev') }
-}
-
-// the day of the last change in the official repository (what the admin interface shows as "DEV <date>")
-async function devDate(): Promise<string | null> {
-  if (!devDateCache || Date.now() - devDateCache.at > 3600_000) {
+  if (!devCache || Date.now() - devCache.at > HOUR) {
     try {
-      const r = await fetch('https://api.github.com/repos/splitti/MuPiBox', { signal: AbortSignal.timeout(8000), headers: { Accept: 'application/vnd.github+json' } })
-      if (r.ok) devDateCache = { at: Date.now(), date: String(((await r.json()) as { pushed_at?: string }).pushed_at ?? '').slice(0, 10) }
+      const c = (await getJson(`${KN_API}/commits/${KN_BRANCH}`)) as {
+        sha?: string
+        commit?: { message?: string; committer?: { date?: string } }
+      }
+      const v = await fetch(`${KN_RAW}/kidsnext/VERSION`, { signal: AbortSignal.timeout(8000) })
+      const version = v.ok ? (await v.text()).trim() : ''
+      devCache = {
+        at: Date.now(),
+        release: c.sha
+          ? {
+              version: /^\d+(\.\d+)+$/.test(version) ? version : '?',
+              ref: KN_BRANCH,
+              info: String(c.commit?.message ?? '')
+                .split('\n')[0]
+                .slice(0, 200),
+              commit: String(c.sha),
+              date: String(c.commit?.committer?.date ?? '').slice(0, 10),
+            }
+          : null,
+      }
     } catch {
       // no internet
     }
   }
-  return devDateCache?.date || null
+  return { stable: stableCache?.release ?? null, dev: devCache?.release ?? null }
 }
 
-/** "4.2.4 stable", "3.2.5 BETA", "DEV 5.0.2 2026-09-01" -> its number and channel */
-export function parseInstalled(v: string): { number: string | null; channel: Channel } {
-  const number = /\d+(?:\.\d+)+/.exec(v)?.[0] ?? null
-  const channel: Channel = /\bdev/i.test(v) ? 'dev' : /\bbeta\b/i.test(v) ? 'beta' : 'stable'
-  return { number, channel }
+export async function readInstalled(file = KN_INSTALLED_JSON): Promise<Installed> {
+  try {
+    const j = JSON.parse(await fsp.readFile(file, 'utf8')) as Record<string, unknown>
+    const s = (k: string) => (typeof j[k] === 'string' && j[k] ? (j[k] as string) : null)
+    return { version: s('version'), ref: s('ref'), commit: s('commit'), date: s('date') }
+  } catch {
+    return { version: null, ref: null, commit: null, date: null }
+  }
+}
+
+/** The channel a box follows: the development branch, or (a tag, or not known) the releases. */
+export function channelOf(installed: Installed): Channel {
+  return installed.ref === KN_BRANCH ? 'dev' : 'stable'
 }
 
 /** -1, 0, 1 for version numbers like 4.2.10 against 4.2.9 */
@@ -190,6 +232,22 @@ export function compareVersions(a: string, b: string): number {
     if (d !== 0) return d > 0 ? 1 : -1
   }
   return 0
+}
+
+/** Whether the channel of the box has something newer: dev by its commit, stable by the version number. */
+export function updateFor(
+  installed: Installed,
+  latest: Record<Channel, Release | null>,
+): { channel: Channel; version: string } | null {
+  const channel = channelOf(installed)
+  const next = latest[channel]
+  if (!next) return null
+  if (channel === 'dev') {
+    if (!next.commit || next.commit === installed.commit) return null
+    return { channel, version: `${next.version} · Stand ${next.date ?? ''}`.trim() }
+  }
+  if (!installed.version) return null
+  return compareVersions(next.version, installed.version) > 0 ? { channel, version: next.version } : null
 }
 
 async function jobState() {
@@ -212,6 +270,7 @@ async function jobState() {
   if (phase === 'rebooting' && !alive) phase = 'ok'
   return {
     kind: state.kind,
+    ref: state.ref ?? '',
     phase, // running | rebooting | ok | failed
     started: Number(state.started) * 1000 || null,
     finished: Number(state.finished) * 1000 || null,
@@ -228,18 +287,20 @@ async function jobState() {
 }
 
 export function registerUpdateRoutes(router: Router, deps: UpdatesDeps): void {
-  /** GET /api/app/updates - the installed version, the official ones, whether there is a newer one, the last job */
+  /** GET /api/app/updates - the installed version, the repository's, whether there is a newer one, the last job */
   router.get('/updates', requireSession, async (_req, res) => {
-    const installed = String((deps.getMupiboxConfig()?.mupibox as Record<string, unknown> | undefined)?.version ?? '')
-    const [latest, date, job] = await Promise.all([officialVersions(), devDate(), jobState()])
-    const mine = parseInstalled(installed)
-    const newer = latest?.[mine.channel]
+    const [latest, installed, job] = await Promise.all([knVersions(), readInstalled(), jobState()])
+    // (a box without installed.json: the version the setup wrote into the config, e.g. "Kids Next 0.1.0")
+    const fromConfig = String((deps.getMupiboxConfig()?.mupibox as Record<string, unknown> | undefined)?.version ?? '')
+    if (!installed.version) installed.version = /\d+(?:\.\d+)+/.exec(fromConfig)?.[0] ?? null
+    const channel = channelOf(installed)
     res.json({
-      installed,
-      channel: mine.channel,
+      repo: KN_REPO,
+      installed: installed.version ? `Kids Next ${installed.version}` : fromConfig,
+      installedInfo: installed,
+      channel,
       latest,
-      devDate: date,
-      update: newer && mine.number && compareVersions(newer.version, mine.number) > 0 ? { channel: mine.channel, version: newer.version } : null,
+      update: updateFor(installed, latest),
       job,
     })
   })
@@ -249,12 +310,21 @@ export function registerUpdateRoutes(router: Router, deps: UpdatesDeps): void {
     res.json({ job: await jobState() })
   })
 
-  /** POST /api/app/updates/start {kind: stable|beta|dev|os} */
+  /** POST /api/app/updates/start {kind: stable|dev|os} - the version is the one the server knows, not the page's */
   router.post('/updates/start', requireSession, requireCsrf, async (req, res) => {
     const kind = String((req.body ?? {}).kind ?? '')
     if (![...CHANNELS, 'os'].includes(kind)) {
       res.status(400).json({ error: 'invalid kind' })
       return
+    }
+    let ref = ''
+    if (kind !== 'os') {
+      const rel = (await knVersions())[kind as Channel]
+      if (!rel || !REF_RE.test(rel.ref)) {
+        res.status(409).json({ error: 'version not known (no internet?)' })
+        return
+      }
+      ref = rel.ref
     }
     const active = (await run('systemctl', ['is-active', UNIT], 5000)).stdout.trim()
     if (active === 'active' || active === 'activating') {
@@ -264,11 +334,10 @@ export function registerUpdateRoutes(router: Router, deps: UpdatesDeps): void {
     const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'mupibox-update-'))
     try {
       await fsp.writeFile(path.join(tmp, 'run.sh'), RUN_SH)
-      await fsp.writeFile(path.join(tmp, 'whiptail'), WHIPTAIL_SH)
       const install = await run('sudo', [
         'sh',
         '-c',
-        `install -d -m 755 ${STATE_DIR} ${STATE_DIR}/bin && install -m 755 '${tmp}/run.sh' ${STATE_DIR}/run.sh && install -m 755 '${tmp}/whiptail' ${STATE_DIR}/bin/whiptail && rm -f ${STATE_DIR}/state ${STATE_DIR}/progress ${STATE_DIR}/output.txt`,
+        `install -d -m 755 ${STATE_DIR} && install -m 755 '${tmp}/run.sh' ${STATE_DIR}/run.sh && rm -rf ${STATE_DIR}/bin ${STATE_DIR}/state ${STATE_DIR}/progress ${STATE_DIR}/output.txt`,
       ])
       if (!install.ok) {
         res.status(500).json({ error: 'could not prepare the update' })
@@ -277,7 +346,18 @@ export function registerUpdateRoutes(router: Router, deps: UpdatesDeps): void {
     } finally {
       await fsp.rm(tmp, { recursive: true, force: true })
     }
-    const r = await run('sudo', ['systemd-run', `--unit=${UNIT}`, '--collect', '--quiet', '--working-directory=/home/dietpi', '/bin/bash', `${STATE_DIR}/run.sh`, kind], 15000)
+    const args = [
+      'systemd-run',
+      `--unit=${UNIT}`,
+      '--collect',
+      '--quiet',
+      '--working-directory=/root',
+      '/bin/bash',
+      `${STATE_DIR}/run.sh`,
+      kind,
+    ]
+    if (ref) args.push(ref)
+    const r = await run('sudo', args, 15000)
     if (!r.ok) {
       res.status(500).json({ error: `could not start the update ${r.stderr.slice(0, 200)}` })
       return

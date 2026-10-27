@@ -57,7 +57,7 @@ Die Lizenz ist **MIT**. Drittkomponenten stehen in `THIRD_PARTY_NOTICES.md`; fü
 | Hotspot | **nicht vorhanden** | neu |
 | Backup | `backup.php`: ZIP mit Config, `data.json`, Covern, Hintergrund; `fullbackup.php`; Wiederherstellung über `apply_restored_settings.sh`/`conf_update.sh`; `file-backup.ts` hält eine `.bak` und Tageskopien (7 Tage) der JSON-Dateien | **neu**: NAS, verschlüsselt, mit Zeitplan; die Tageskopien bleiben |
 | „NAS“ im Original | `nas.php` und `/api/nas`: **WebDAV-Medienquelle** (Ordner auf dem NAS durchsuchen und herunterladen), **kein Backup-Ziel** | bleibt als Medienquelle |
-| Updates | Kanäle stable/beta/dev/branch, Abbruchschutz, Konfigurationsmigration per `conf_update.sh` | übernehmen, auf unseren Fork umstellen |
+| Updates | Kanäle stable/beta/dev/branch, Abbruchschutz, Konfigurationsmigration per `conf_update.sh` | **ersetzt** (seit 0.1.0): nur noch aus dem Kids-Next-Repository, Kanäle Stabil (Release-Tag) und Entwicklung (Commit auf `kids-next`); das Update ist `install.sh --new --yes`. Upstream-Update und -Downloads sind abgeschaltet, siehe installation.md › Updates |
 | Fernzugriff | VNC/noVNC, DietPi-Dashboard, Telegram-Bot, MQTT/Home Assistant (alles optional und aus) | NetBird neu; Rest optional |
 | Elternschutz | Login für die Eltern-App (Session), CSRF-Schutz, Hostname-Prüfung gegen DNS-Rebinding (`lighttpd_hosts.sh`), eigene kleine CA für HTTPS | übernehmen |
 | RFID | **im Original nicht vorhanden** | entfällt (Entscheidung oben) |
@@ -416,7 +416,7 @@ MuPiBox (Fork)/
 ├── src/ … scripts/ … config/ …        ← Upstream, nur gezielt geändert (markiert mit "KN:")
 └── kidsnext/
     ├── install.sh                      ← Einstieg (Neuinstallation / Restore), ersetzt autosetup.sh
-    ├── update.sh
+    ├── (Update = install.sh --new --yes, aus der App über eltern/updates.ts)
     ├── restore.sh                      ← Restore auch später aus der laufenden Box
     ├── installer/
     │   ├── lib.sh                      ← Logging, Fehler, idempotente Helfer (ensure_line, ensure_pkg …)

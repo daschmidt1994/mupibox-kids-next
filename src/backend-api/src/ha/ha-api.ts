@@ -25,7 +25,7 @@ import os from 'node:os'
 import express, { type Express, type NextFunction, type Request, type RequestHandler, type Response, type Router } from 'express'
 import { headphonesPlaying } from '../audio-output'
 import { displayLoginLinkShown } from '../eltern/auth'
-import { compareVersions, officialVersions, parseInstalled } from '../eltern/updates'
+import { channelOf, knVersions, readInstalled, updateFor } from '../eltern/updates'
 import { announce, speechOf } from '../speech'
 import { isLoopback } from '../request-guard'
 import { type PlaybackCovers, playbackSnapshot } from '../playback-snapshot'
@@ -667,18 +667,18 @@ export function buildApp(deps: HaDeps): Express {
     })
   })
 
-  /** GET /update (read) - a newer version of the box's channel (stable, beta, dev) */
+  /** GET /update (read) - a newer version of the box's channel (KN: Kids Next's stable or dev, from its repository) */
   v1.get('/update', requireScope('read'), async (_req, res) => {
-    const installed = String((deps.getMupiboxConfig()?.mupibox as Record<string, unknown> | undefined)?.version ?? '')
-    const mine = parseInstalled(installed)
-    const latest = await officialVersions().catch(() => null)
-    if (!latest) return fail(res, 503, 'temporarily_unavailable', 'The versions could not be read (internet?)')
-    const newer = latest[mine.channel]
+    const mine = await readInstalled()
+    const latest = await knVersions().catch(() => null)
+    const channel = channelOf(mine)
+    const newer = latest?.[channel]
+    if (!latest || !newer) return fail(res, 503, 'temporarily_unavailable', 'The versions could not be read (internet?)')
     res.json({
-      update_available: !!(newer && mine.number && compareVersions(newer.version, mine.number) > 0),
-      channel: mine.channel,
-      installed,
-      release: newer ? { version: newer.version } : null,
+      update_available: !!updateFor(mine, latest),
+      channel,
+      installed: mine.version ? `Kids Next ${mine.version}` : String((deps.getMupiboxConfig()?.mupibox as Record<string, unknown> | undefined)?.version ?? ''),
+      release: { version: newer.version },
     })
   })
 

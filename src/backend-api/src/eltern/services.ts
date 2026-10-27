@@ -37,7 +37,8 @@ async function isActive(unit: string): Promise<boolean> {
 /* shares */
 
 const APT = 'flock -w 120 /tmp/.mupibox.apt.lock'
-const TEMPLATES = 'https://raw.githubusercontent.com/splitti/MuPiBox/main/config/templates'
+// KN: the templates of the installed version, on the box (kidsnext/installer/base.sh) - not from the original's GitHub
+const TEMPLATES = '/opt/mupibox-kn/app/upstream/templates'
 const SHARES: Record<string, { unit: string; on: string; off: string }> = {
   samba: {
     unit: 'smbd',
@@ -47,7 +48,7 @@ const SHARES: Record<string, { unit: string; on: string; off: string }> = {
     // switched on and off with smbd. It was never started before: the box was missing in the Windows network.
     on:
       `WSD=$(apt-cache show wsdd2 >/dev/null 2>&1 && echo wsdd2 || echo wsdd); ` +
-      `if ! command -v smbd >/dev/null; then ${APT} apt-get install samba $WSD -y && wget -q ${TEMPLATES}/smb.conf -O /etc/samba/smb.conf && (echo mupibox; echo mupibox) | smbpasswd -s -a dietpi || exit 1; fi; ` +
+      `if ! command -v smbd >/dev/null; then ${APT} apt-get install samba $WSD -y && cp -f ${TEMPLATES}/smb.conf /etc/samba/smb.conf && (echo mupibox; echo mupibox) | smbpasswd -s -a dietpi || exit 1; fi; ` +
       // (the announcement is a help, not the share: without it the switch still counts as done)
       `dpkg -s wsdd >/dev/null 2>&1 || dpkg -s wsdd2 >/dev/null 2>&1 || ${APT} apt-get install $WSD -y; ` +
       `systemctl enable smbd && systemctl start smbd || exit 1; ` +
@@ -56,7 +57,7 @@ const SHARES: Record<string, { unit: string; on: string; off: string }> = {
   },
   ftp: {
     unit: 'proftpd',
-    on: `if ! command -v proftpd >/dev/null; then ${APT} apt-get install proftpd -y && wget -q ${TEMPLATES}/proftpd.conf -O /etc/proftpd/proftpd.conf; fi && systemctl enable proftpd && systemctl restart proftpd`,
+    on: `if ! command -v proftpd >/dev/null; then ${APT} apt-get install proftpd -y && cp -f ${TEMPLATES}/proftpd.conf /etc/proftpd/proftpd.conf; fi && systemctl enable proftpd && systemctl restart proftpd`,
     off: 'systemctl stop proftpd; systemctl disable proftpd',
   },
   vnc: {

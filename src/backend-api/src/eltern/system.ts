@@ -8,6 +8,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import type { Router } from 'express'
 import type { MupiboxConfig } from '../models/mupibox-config.model'
+import { KN_RAW } from './kn-repo'
 import { requireCsrf, requireSession } from './middleware'
 
 export interface SystemDeps {
@@ -317,11 +318,11 @@ export function registerSystemRoutes(router: Router, deps: SystemDeps): void {
     res.json({ version: String((deps.getMupiboxConfig()?.mupibox as Record<string, unknown> | undefined)?.version ?? '') })
   })
 
-  /** GET /api/app/news - the MuPiBox news (news.txt on GitHub), as text (the admin interface printed it as HTML). */
+  /** GET /api/app/news - the Kids Next news (KN: kidsnext/news.txt of its repository, not the original's), as text (the admin interface printed it as HTML). */
   router.get('/news', requireSession, async (_req, res) => {
     if (!newsCache || Date.now() - newsCache.at > 3600_000) {
       try {
-        const r = await fetch('https://raw.githubusercontent.com/splitti/MuPiBox/main/news.txt', { signal: AbortSignal.timeout(8000) })
+        const r = await fetch(`${KN_RAW}/kidsnext/news.txt`, { signal: AbortSignal.timeout(8000) })
         if (r.ok) newsCache = { at: Date.now(), text: (await r.text()).slice(0, 100000) }
       } catch {
         // no internet: the last text, if any

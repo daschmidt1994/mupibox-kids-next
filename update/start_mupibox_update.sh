@@ -1,4 +1,10 @@
 #!/bin/bash
+
+# KN: the original's update would replace MuPiBox Kids Next with an upstream release - Kids Next updates in the app
+# (Einstellungen › Updates) or with kidsnext/install.sh
+echo "MuPiBox Kids Next: this update script of the original MuPiBox is not used. Update in the app or with:" >&2
+echo "  curl -fsSL https://raw.githubusercontent.com/daschmidt1994/mupibox-kids-next/kids-next/kidsnext/install.sh | sudo bash" >&2
+exit 1
 #
 
 #https://raw.githubusercontent.com/splitti/MuPiBox/main

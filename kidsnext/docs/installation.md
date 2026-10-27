@@ -56,8 +56,24 @@ Hinweise:
   ```
 - Nach dem Neustart zeigt `sudo mupibox-kn-selftest`, ob alles da ist.
 
+## Updates
+Kids Next wird **nur aus diesem Repository** aktualisiert, nie aus der originalen MuPiBox. Deren Versionen sind für ihr eigenes Image mit älterem Debian gebaut und würden Kids Next überschreiben.
+
+- **In der Eltern-App:** Einstellungen › Die Box › Updates.
+  - **Stabil:** das neueste Release auf GitHub (Tag, z. B. `v0.2.0`).
+  - **Entwicklung:** der aktuelle Stand des Branches `kids-next`. Ein Update wird angezeigt, sobald dort ein neuer Commit liegt.
+  - Die Box folgt dem Kanal, mit dem sie installiert wurde. Ein Klick auf den anderen Kanal wechselt ihn.
+- **Was dabei passiert:** Dieselbe Installation wie auf einer neuen Box (`install.sh --new --yes`), dauert 20–40 Minuten, danach Neustart.
+  - Einstellungen, Bibliothek, Cover, WLAN und Backup-Einrichtung bleiben erhalten.
+  - Einstellungen und Bibliothek werden vorher zusätzlich als ZIP in `/home/dietpi/mupibox-backups` gesichert (die neuesten drei bleiben).
+  - Ein Abbruch lässt die Daten unangetastet; das Update kann einfach erneut gestartet werden.
+- **Betriebssystem** (apt) getrennt davon über denselben Bildschirm.
+- **Von Hand:** `curl -fsSL https://raw.githubusercontent.com/daschmidt1994/mupibox-kids-next/kids-next/kidsnext/install.sh | sudo bash -s -- --ref <tag oder kids-next>`
+- Die installierte Version samt Commit steht in `/var/lib/mupibox-kn/installed.json`.
+- Abgeschaltet: das alte Update-Skript der MuPiBox (`update/start_mupibox_update.sh`) und `autosetup.sh` ohne Kids-Next-Installer. Vorlagen und WLAN-Treiberskripte kommen von der Box selbst (`/opt/mupibox-kn/app/upstream`), die Neuigkeiten aus `kidsnext/news.txt`.
+
 ## Wiederherstellung nach SD-Defekt
-Genauso installieren (mit demselben Hostnamen wie die alte Box). Danach per SSH:
+Genauso installieren (mit demselben Hostnamen wie die alte Box). Danach in der Eltern-App unter Einstellungen › Die Box › Backup › „Vom NAS wiederherstellen“, oder per SSH:
 ```
 sudo mupibox-restore
 ```

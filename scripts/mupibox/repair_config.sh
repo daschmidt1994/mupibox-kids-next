@@ -3,11 +3,12 @@
 # Config repair in node-sonos-config
 
 FRONTENDCONFIG="/home/dietpi/.mupibox/Sonos-Kids-Controller-master/server/config/config.json"
-SRC="https://mupibox.de/version/latest"
+# KN: the template from the box itself (kidsnext/installer/base.sh), not from mupibox.de
+SRC="/opt/mupibox-kn/app/upstream"
 HOSTN=$(/usr/bin/hostname)
 
-rm ${FRONTENDCONFIG}
-wget ${SRC}/config/templates/www.json -O ${FRONTENDCONFIG}
+[ -f "${SRC}/templates/www.json" ] || exit 1
+cp -f "${SRC}/templates/www.json" "${FRONTENDCONFIG}"
 
 /usr/local/bin/mupibox/./set_hostname.sh
 # Atomic-update (HIGH-8).

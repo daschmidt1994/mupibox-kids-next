@@ -66,7 +66,11 @@ if [ -z "${KN_ROOT}" ] || [ ! -f "${KN_ROOT}/kidsnext/installer/lib.sh" ] || [ !
 	echo "==> Lade MuPiBox Kids Next (${KN_REPO}, ${KN_REF}) ..."
 	mkdir -p "${SRC_BASE}"
 	TMP_DIR=$(mktemp -d "${SRC_BASE}/.download.XXXXXX") || exit 1
-	if ! curl -fsSL --retry 3 --retry-delay 3 -m 600 "https://codeload.github.com/${KN_REPO}/tar.gz/${KN_REF}" | tar -xz -C "${TMP_DIR}"; then
+	# the commit the branch or tag stands at now: it is downloaded exactly, and the app compares it for updates
+	KN_COMMIT=$(curl -fsS -m 20 -H 'Accept: application/vnd.github.sha' "https://api.github.com/repos/${KN_REPO}/commits/${KN_REF}" 2>/dev/null)
+	[[ "${KN_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || KN_COMMIT=""
+	export KN_COMMIT
+	if ! curl -fsSL --retry 3 --retry-delay 3 -m 600 "https://codeload.github.com/${KN_REPO}/tar.gz/${KN_COMMIT:-${KN_REF}}" | tar -xz -C "${TMP_DIR}"; then
 		rm -rf "${TMP_DIR}"
 		echo "  ✘ Download fehlgeschlagen. Ist die Box mit dem Internet verbunden?" >&2
 		exit 1
@@ -90,6 +94,8 @@ fi
 
 # ---------------------------------------------------------------------------------------------------------------------
 KN_VERSION="$(tr -d '[:space:]' < "${KN_ROOT}/kidsnext/VERSION")"
+# (a git checkout: its commit; the download above set it already)
+[ -z "${KN_COMMIT}" ] && [ -d "${KN_ROOT}/.git" ] && KN_COMMIT=$(git -C "${KN_ROOT}" rev-parse HEAD 2>/dev/null)
 KN_INSTALLER="${KN_ROOT}/kidsnext/installer"
 # shellcheck source=installer/lib.sh
 . "${KN_INSTALLER}/lib.sh"
@@ -209,8 +215,8 @@ kn_info "Installation prüfen"
 SELFTEST_FAILED=0
 "${KN_INSTALLER}/selftest.sh" --install || SELFTEST_FAILED=1
 
-jq -n --arg v "${KN_VERSION}" --arg m "${KN_MODE}" --arg d "$(date -Iseconds)" --arg ref "${KN_REF}" \
-	'{version: $v, mode: $m, date: $d, ref: $ref}' > "${KN_STATE_DIR}/installed.json"
+jq -n --arg v "${KN_VERSION}" --arg m "${KN_MODE}" --arg d "$(date -Iseconds)" --arg ref "${KN_REF}" --arg c "${KN_COMMIT}" \
+	'{version: $v, mode: $m, date: $d, ref: $ref, commit: $c}' > "${KN_STATE_DIR}/installed.json"
 
 echo
 if [ "${SELFTEST_FAILED}" = 1 ]; then

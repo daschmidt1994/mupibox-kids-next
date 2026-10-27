@@ -7,6 +7,14 @@
 # Or a branch of a repository (to test a state before its release), as the update takes it:
 #   ... | sudo bash -s -- branch <branch> [owner/repository, splitti/MuPiBox when none is given]
 
+# KN: Kids Next installs and updates only from its own sources (kidsnext/install.sh hands them over as KN_SRC). The
+# original's releases (an image of their own, an older Debian) would replace it: they are not installed from here.
+if [ -z "${KN_SRC}" ]; then
+	echo "MuPiBox Kids Next: please install or update with kidsnext/install.sh:" >&2
+	echo "  curl -fsSL https://raw.githubusercontent.com/daschmidt1994/mupibox-kids-next/kids-next/kidsnext/install.sh | sudo bash" >&2
+	exit 1
+fi
+
 case "$1" in
 	stable|beta|dev)
 		RELEASE="$1"
