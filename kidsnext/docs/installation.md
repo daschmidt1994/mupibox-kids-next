@@ -37,6 +37,13 @@ Hinweise:
 - `AUTO_SETUP_GLOBAL_PASSWORD` ist das Passwort für `root` und `dietpi` (SSH). Bitte ein eigenes nehmen, **nicht** `mupibox` oder `dietpi`. DietPi löscht es nach dem ersten Start aus der Datei.
 - Optional: Für einen anderen Stand des Installers (Branch oder Tag) die Datei `mupibox-kn.txt` daneben legen, mit einer Zeile `KN_REF=<branch>`.
 
+## Optional: NetBird gleich mitverbinden
+Neben `dietpi.txt` eine Datei `mupibox-kn-netbird.txt` anlegen, Details in [netbird.md](netbird.md):
+```
+KN_NETBIRD_URL=https://netbird.daschmidt.at
+KN_NETBIRD_SETUP_KEY=<Setup-Key, am besten einmalig und kurz gültig>
+```
+
 ## 4. Starten
 1. Den USB-WLAN-Stick für den ersten Start am besten **noch nicht** einstecken; er wird später eingerichtet. **[auf Hardware prüfen]**
 2. Karte in den Pi, Strom an.

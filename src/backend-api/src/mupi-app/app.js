@@ -10241,6 +10241,120 @@ function mountUpdates(root, page) {
   if (jobRunning()) pollUpdate(page)
 }
 
+/* Einstellungen › Netzwerk › NetBird (KN): the box in the parents' own VPN - the app from outside the home network */
+
+const nb = { status: null, missing: false }
+const NB_STATE = {
+  Connected: ['ok', 'verbunden'],
+  Connecting: ['', 'verbindet …'],
+  Idle: ['', 'getrennt'],
+  NeedsLogin: ['warn', 'nicht angemeldet'],
+  LoginFailed: ['danger', 'Anmeldung fehlgeschlagen'],
+  SessionExpired: ['warn', 'Anmeldung abgelaufen'],
+}
+
+async function loadNetbird() {
+  const r = await api(`${API}/kn/netbird`)
+  nb.missing = r.status === 503 && !r.body?.installing
+  nb.status = r.ok ? r.body : r.body?.installing ? { installing: true } : null
+}
+
+function netbirdTop() {
+  const s = nb.status
+  const intro = `<p class="page-intro">Mit NetBird ist die Box in deinem eigenen VPN: Die Eltern-App erreichst du dann auch unterwegs über die NetBird-Adresse – ohne Portfreigabe im Router.</p>`
+  if (nb.missing || !s) {
+    return [intro, `<section class="card"><h2>NetBird</h2><p class="help">Der NetBird-Baustein von MuPiBox Kids Next ist auf dieser Box nicht installiert. Ein Update (System › Updates) bringt ihn mit.</p></section>`]
+  }
+  if (s.installing) {
+    return [intro, `<section class="card"><h2>NetBird</h2><div class="bar"><div class="track indet"><i></i></div><small>NetBird wird installiert … (1–3 Minuten)</small></div></section>`]
+  }
+  if (!s.installed) {
+    return [
+      intro,
+      `<section class="card"><h2>NetBird</h2><p class="help">NetBird ist noch nicht installiert. Es kommt aus dem offiziellen Repository von netbird.io und wird danach mit dem Betriebssystem aktualisiert.</p>
+        <div class="btns"><button class="btn primary" id="nb-install">NetBird installieren</button></div></section>`,
+    ]
+  }
+  const [cls, label] = NB_STATE[s.daemonStatus] ?? ['', s.daemonStatus || 'unbekannt']
+  const connected = s.daemonStatus === 'Connected'
+  const registered = !['NeedsLogin', 'LoginFailed', 'SessionExpired', 'unknown'].includes(s.daemonStatus)
+  const appUrl = s.ip ? `http://${s.ip}/app/` : ''
+  return [
+    intro,
+    `<section class="card"><div class="card-head"><h2>NetBird</h2><span class="chip ${cls}">${esc(label)}</span></div>
+      <dl class="kv">
+        <div><dt>Server</dt><dd>${esc(s.managementUrl || '–')}</dd></div>
+        ${s.ip ? `<div><dt>NetBird-IP</dt><dd translate="no">${esc(s.ip)}</dd></div>` : ''}
+        ${s.fqdn ? `<div><dt>Name im VPN</dt><dd translate="no">${esc(s.fqdn)}</dd></div>` : ''}
+        ${registered ? `<div><dt>Andere Geräte</dt><dd>${s.peersConnected} von ${s.peersTotal} erreichbar</dd></div>` : ''}
+        ${s.version ? `<div><dt>Version</dt><dd>${esc(s.version)}</dd></div>` : ''}
+      </dl>
+      ${s.managementError && !connected ? `<div class="note warn">${icon('info', 18)}<span>${esc(s.managementError)}</span></div>` : ''}
+      ${connected && appUrl ? `<div class="note">${icon('info', 18)}<span>Unterwegs (mit NetBird auf dem Handy): <b translate="no">${esc(appUrl)}</b></span></div>` : ''}
+      <div class="btns">
+        <button class="btn${registered ? '' : ' primary'}" id="nb-setup">${registered ? 'Mit neuem Setup-Key verbinden' : 'Verbinden'}</button>
+        ${registered && !connected ? `<button class="btn primary" id="nb-up">Wieder verbinden</button>` : ''}
+        ${connected ? `<button class="btn" id="nb-down">Trennen</button>` : ''}
+      </div></section>`,
+  ]
+}
+
+function openNetbirdSetup(page) {
+  const s = nb.status ?? {}
+  openSheet(
+    `<h2>NetBird verbinden</h2>
+     <div class="field"><label for="nb-url">Server (Management-URL)</label><input class="input" id="nb-url" inputmode="url" autocomplete="off" placeholder="https://netbird.example.com" value="${esc(s.managementUrl && !/api\.netbird\.io|api\.wiretrustee\.com/.test(s.managementUrl) ? s.managementUrl.replace(/:443\/?$/, '') : '')}"><small>Die Adresse deines NetBird-Servers; für die NetBird-Cloud: https://api.netbird.io</small></div>
+     <div class="field"><label for="nb-key">Setup-Key</label><input class="input" id="nb-key" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"><small>Im NetBird-Dashboard unter „Setup Keys“ anlegen. Er wird nur an NetBird übergeben und nicht auf der Box gespeichert.</small></div>
+     <div class="field"><label for="nb-host">Name im VPN</label><input class="input" id="nb-host" autocomplete="off" value="${esc(s.hostname ?? '')}"><small>Wie die Box im NetBird-Dashboard heißt.</small></div>
+     <div class="btns"><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="nb-go">Verbinden</button></div>
+     <p class="help" id="nb-msg" style="margin:0"></p>`,
+    (sheet, close) => {
+      sheet.querySelector('[data-close]').onclick = close
+      $('#nb-go', sheet).onclick = async () => {
+        const btn = $('#nb-go', sheet)
+        btn.disabled = true
+        $('#nb-msg', sheet).textContent = 'Verbinde mit dem NetBird-Server …'
+        const r = await api(`${API}/kn/netbird/up`, {
+          method: 'POST',
+          body: { url: $('#nb-url', sheet).value.trim(), setupKey: $('#nb-key', sheet).value.trim(), hostname: $('#nb-host', sheet).value.trim() },
+        })
+        btn.disabled = false
+        if (!r.ok) {
+          $('#nb-msg', sheet).textContent = r.body?.error ?? 'Das hat nicht geklappt'
+          return
+        }
+        close()
+        toast(r.body?.ip ? `NetBird verbunden – ${r.body.ip}` : 'NetBird verbunden')
+        renderPage(page)
+      }
+    },
+  )
+}
+
+function mountNetbird(root, page) {
+  $('#nb-setup', root)?.addEventListener('click', () => openNetbirdSetup(page))
+  $('#nb-install', root)?.addEventListener('click', async () => {
+    const r = await api(`${API}/kn/netbird/install`, { method: 'POST' })
+    if (!r.ok) return toast(r.body?.error ?? 'Das hat nicht geklappt', 'info')
+    nb.status = { installing: true }
+    renderPage(page, false)
+  })
+  $('#nb-up', root)?.addEventListener('click', async () => {
+    toast('Verbinde …')
+    const r = await api(`${API}/kn/netbird/up`, { method: 'POST', body: { url: nb.status?.managementUrl?.replace(/:443\/?$/, '') ?? '' } })
+    toast(r.ok ? 'NetBird verbunden' : (r.body?.error ?? 'Das hat nicht geklappt'), r.ok ? undefined : 'info')
+    renderPage(page)
+  })
+  $('#nb-down', root)?.addEventListener('click', async () => {
+    if (!(await ask('NetBird trennen?', 'Die Box ist dann nicht mehr über NetBird erreichbar – auch nicht von unterwegs. Wieder verbinden geht hier ohne neuen Setup-Key.', 'Trennen'))) return
+    const r = await api(`${API}/kn/netbird/down`, { method: 'POST' })
+    toast(r.ok ? 'NetBird getrennt' : (r.body?.error ?? 'Das hat nicht geklappt'), r.ok ? undefined : 'info')
+    renderPage(page)
+  })
+  // (while it installs or connects: the card follows it)
+  if (nb.status?.installing || nb.status?.daemonStatus === 'Connecting') every(4000, () => renderPage(page))
+}
+
 // Einstellungen › Dienste: the block with the box's own shares (Samba, FTP, VNC)
 const isSharesSection = (s) => (s.items ?? []).some((it) => it.target === 'freigaben')
 
@@ -11847,6 +11961,7 @@ const CONTROLLERS = {
   },
   experten: { load: loadExperts, top: expertsTop, sections: () => [], ownNav: true, mount: mountExperts },
   backup: { load: loadBackup, top: backupTop, sections: () => [], mount: mountBackup },
+  netbird: { load: loadNetbird, top: netbirdTop, sections: () => [], mount: mountNetbird },
   updates: { load: loadUpdates, top: updatesTop, sections: () => [], ownNav: true, mount: mountUpdates },
   nas: {
     load: loadNas,

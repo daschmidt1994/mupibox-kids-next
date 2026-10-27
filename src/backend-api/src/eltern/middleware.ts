@@ -22,8 +22,8 @@ declare module 'express-serve-static-core' {
   }
 }
 
-/** RFC1918 + loopback + IPv6 link-local. Boxes never speak to anything else. */
-function isPrivateIp(ip: string): boolean {
+/** RFC1918 + loopback + IPv6 link-local + NetBird (100.64.0.0/10). Boxes never speak to anything else. */
+export function isPrivateIp(ip: string): boolean {
   // Strip IPv6-mapped-IPv4 prefix.
   const v = ip.replace(/^::ffff:/, '')
   if (v === '127.0.0.1' || v === '::1' || v === 'localhost') return true
@@ -34,6 +34,11 @@ function isPrivateIp(ip: string): boolean {
     if (second >= 16 && second <= 31) return true
   }
   if (v.startsWith('169.254.')) return true // link-local
+  // KN: 100.64.0.0/10 (shared address space, not routed on the internet): NetBird's addresses - the parents' own VPN
+  if (v.startsWith('100.')) {
+    const second = Number.parseInt(v.split('.')[1] ?? '0', 10)
+    if (second >= 64 && second <= 127) return true
+  }
   if (v.startsWith('fe80:')) return true // IPv6 link-local
   if (v.startsWith('fd') || v.startsWith('fc')) return true // IPv6 ULA
   return false

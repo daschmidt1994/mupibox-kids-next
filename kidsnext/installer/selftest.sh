@@ -57,12 +57,14 @@ fi
 check no_web_root "Webserver ohne Root-Rechte" test ! -e /etc/sudoers.d/www-data
 check secrets_dir "Ordner für Zugangsdaten geschützt" sh -c '[ "$(stat -c %a /etc/mupibox-kn/secrets)" = 700 ]'
 soft_check soundcard "Soundkarte erkannt" sh -c 'aplay -l 2>/dev/null | grep -q "^card"'
+soft_check netbird "NetBird installiert" command -v netbird
 
 if [ "${MODE}" = "running" ]; then
 	check pm2 "Dienst pm2-dietpi läuft" systemctl is-active -q pm2-dietpi
 	check api "MuPiBox-Server antwortet (Port 8200)" curl -fsS -o /dev/null -m 5 http://127.0.0.1:8200/
 	check app "Eltern-App erreichbar" sh -c 'code=$(curl -ks -o /dev/null -w "%{http_code}" -m 5 https://127.0.0.1/app/); [ "${code}" -ge 200 ] && [ "${code}" -lt 500 ]'
 	soft_check display "Display-Oberfläche läuft" pgrep -f chromium
+	soft_check netbird_service "Dienst netbird aktiv" systemctl is-active -q netbird
 	for unit in mupi_startstop mupi_wifi mupi_check_internet; do
 		soft_check "unit_${unit}" "Dienst ${unit} aktiv" systemctl is-active -q "${unit}"
 	done

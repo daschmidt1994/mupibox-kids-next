@@ -1,0 +1,173 @@
+#!/bin/bash
+#
+# MuPiBox Kids Next – NetBird (Fernzugriff über das eigene VPN). Für die Eltern-App und für SSH, als root.
+#
+#   mupi-kn-netbird status [--json]                       Verbindung, NetBird-IP, Name, Peers
+#   mupi-kn-netbird up --url <https://…> [--hostname <name>] [--key-stdin]
+#                                                         verbinden; der Setup-Key kommt auf stdin (nie als Argument)
+#   mupi-kn-netbird down                                  trennen (die Anmeldung bleibt, "up" verbindet wieder)
+#   mupi-kn-netbird install                               NetBird aus dem offiziellen apt-Repository installieren
+#
+# The setup key is handed to netbird as a file (--setup-key-file, 0600 in /run, removed right after): as an argument
+# it would be visible in the process list. It is never written to a log or to the box's settings.
+
+set -o pipefail
+export LC_ALL=C.UTF-8
+umask 077
+
+NB="${KN_NETBIRD_BIN:-netbird}"
+RUN_DIR="${KN_RUN_DIR:-/run/mupibox-kn}"
+KEYRING=/usr/share/keyrings/netbird-archive-keyring.gpg
+SOURCES=/etc/apt/sources.list.d/netbird.list
+REPO_URL=https://pkgs.netbird.io/debian
+JSON=0
+
+die() {
+	if [ "${JSON}" = 1 ]; then
+		jq -n --arg e "$1" '{ok: false, error: $e}'
+	else
+		echo "✘ $1" >&2
+	fi
+	exit "${2:-1}"
+}
+
+valid_url() { [[ "$1" =~ ^https?://[A-Za-z0-9]([A-Za-z0-9.-]{0,252})(:[0-9]{1,5})?/?$ ]]; }
+valid_hostname() { [[ "$1" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]; }
+# NetBird's setup keys are UUIDs; reusable/self-made ones may differ - letters, digits and dashes
+valid_key() { [[ "$1" =~ ^[A-Za-z0-9-]{8,128}$ ]]; }
+
+installed() { command -v "${NB}" >/dev/null 2>&1; }
+
+cmd_status() {
+	if ! installed; then
+		jq -n '{installed: false}'
+		return 0
+	fi
+	local raw service
+	service=$(systemctl is-active netbird 2>/dev/null)
+	raw=$(timeout 15 "${NB}" status --json 2>/dev/null) || raw=""
+	jq -n --arg service "${service:-unknown}" --arg raw "${raw}" '
+		($raw | try fromjson catch null) as $s
+		| {
+			installed: true,
+			service: $service,
+			daemonStatus: ($s.daemonStatus // (if $s == null then "unknown" elif ($s.management.connected // false) then "Connected" else "Idle" end)),
+			managementUrl: ($s.management.url // ""),
+			managementConnected: ($s.management.connected // false),
+			managementError: ($s.management.error // ""),
+			ip: (($s.netbirdIp // "") | sub("/.*$"; "")),
+			fqdn: ($s.fqdn // ""),
+			peersTotal: ($s.peers.total // 0),
+			peersConnected: ($s.peers.connected // 0),
+			version: ($s.daemonVersion // $s.cliVersion // "")
+		}'
+}
+
+cmd_up() {
+	local url="" hostname="" key_stdin=0 key="" keyfile="" out rc
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--url) url="$2"; shift ;;
+			--hostname) hostname="$2"; shift ;;
+			--key-stdin) key_stdin=1 ;;
+			*) die "Unbekannte Option: $1" 2 ;;
+		esac
+		shift
+	done
+	installed || die "NetBird ist nicht installiert."
+	valid_url "${url}" || die "Die Server-Adresse ist ungültig (z. B. https://netbird.example.com)." 2
+	[ -z "${hostname}" ] || valid_hostname "${hostname}" || die "Der Name ist ungültig (Buchstaben, Ziffern, Bindestrich)." 2
+	if [ "${key_stdin}" = 1 ]; then
+		IFS= read -r key || true
+		key="${key//[[:space:]]/}"
+		valid_key "${key}" || die "Der Setup-Key ist ungültig." 2
+	fi
+
+	systemctl is-active -q netbird || systemctl start netbird 2>/dev/null
+	local args=(up --management-url "${url}")
+	[ -n "${hostname}" ] && args+=(--hostname "${hostname}")
+	if [ -n "${key}" ]; then
+		install -d -m 700 "${RUN_DIR}"
+		keyfile=$(mktemp "${RUN_DIR}/nb-key.XXXXXX") || die "Kein temporärer Speicher."
+		trap 'rm -f "${keyfile}"' EXIT
+		printf '%s' "${key}" > "${keyfile}"
+		args+=(--setup-key-file "${keyfile}")
+	else
+		# without a key only a box that is registered already can connect - else netbird would wait for a login in a
+		# browser (SSO) until the timeout
+		local st
+		st=$(cmd_status | jq -r .daemonStatus)
+		case "${st}" in NeedsLogin | LoginFailed | SessionExpired) die "Die Box ist bei NetBird nicht angemeldet – bitte einen Setup-Key eingeben." 3 ;; esac
+	fi
+	out=$(timeout 90 "${NB}" "${args[@]}" 2>&1)
+	rc=$?
+	[ -n "${keyfile}" ] && rm -f "${keyfile}"
+	# (netbird's message, without the key should it ever echo it)
+	[ -n "${key}" ] && out="${out//${key}/***}"
+	if [ "${rc}" -ne 0 ]; then
+		local why
+		why=$(printf '%s\n' "${out}" | grep -v '^\s*$' | tail -n 1)
+		[ "${rc}" = 124 ] && why="Zeitüberschreitung – ist der Server erreichbar?"
+		die "Verbinden fehlgeschlagen: ${why:-Fehler ${rc}}"
+	fi
+	if [ "${JSON}" = 1 ]; then
+		cmd_status | jq '{ok: true} + .'
+	else
+		echo "✔ NetBird verbunden."
+	fi
+}
+
+cmd_down() {
+	installed || die "NetBird ist nicht installiert."
+	timeout 30 "${NB}" down >/dev/null 2>&1 || die "Trennen fehlgeschlagen."
+	if [ "${JSON}" = 1 ]; then jq -n '{ok: true}'; else echo "✔ NetBird getrennt."; fi
+}
+
+cmd_install() {
+	if ! installed; then
+		command -v gpg >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends gpg || die "gpg ließ sich nicht installieren."
+		local tmp
+		tmp=$(mktemp) || die "Kein temporärer Speicher."
+		if ! curl -fsSL --retry 3 -m 60 "${REPO_URL}/public.key" -o "${tmp}" || ! gpg --dearmor < "${tmp}" > "${KEYRING}.new"; then
+			rm -f "${tmp}" "${KEYRING}.new"
+			die "Der Schlüssel des NetBird-Repositorys ließ sich nicht laden."
+		fi
+		rm -f "${tmp}"
+		chmod 644 "${KEYRING}.new" && mv -f "${KEYRING}.new" "${KEYRING}"
+		echo "deb [signed-by=${KEYRING}] ${REPO_URL} stable main" > "${SOURCES}"
+		chmod 644 "${SOURCES}"
+		DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 update -o Dir::Etc::sourcelist="${SOURCES}" -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 || die "Das NetBird-Repository ist nicht erreichbar."
+		DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y netbird || die "NetBird ließ sich nicht installieren."
+	fi
+	# the package installs the program; its service is installed by the program itself
+	if ! systemctl cat netbird >/dev/null 2>&1; then
+		"${NB}" service install >/dev/null 2>&1 || die "Der NetBird-Dienst ließ sich nicht einrichten."
+	fi
+	systemctl enable netbird >/dev/null 2>&1
+	systemctl start netbird >/dev/null 2>&1 || die "Der NetBird-Dienst startet nicht."
+	if [ "${JSON}" = 1 ]; then cmd_status | jq '{ok: true} + .'; else echo "✔ NetBird installiert ($("${NB}" version 2>/dev/null))."; fi
+}
+
+[ "$(id -u)" = 0 ] || [ -n "${KN_NETBIRD_TEST}" ] || die "Bitte als root starten (sudo)."
+command -v jq >/dev/null || die "jq fehlt."
+
+CMD="${1:-status}"
+shift || true
+ARGS=()
+for a in "$@"; do
+	if [ "${a}" = --json ]; then JSON=1; else ARGS+=("${a}"); fi
+done
+case "${CMD}" in
+	status)
+		if [ "${JSON}" = 1 ]; then
+			cmd_status
+		else
+			cmd_status | jq -r 'if .installed then "NetBird: \(.daemonStatus)\nServer:  \(.managementUrl)\nIP:      \(.ip)\nName:    \(.fqdn)\nPeers:   \(.peersConnected)/\(.peersTotal)" else "NetBird ist nicht installiert." end'
+		fi
+		;;
+	up) cmd_up "${ARGS[@]}" ;;
+	down) cmd_down ;;
+	install) cmd_install ;;
+	-h | --help | help) sed -n '3,10p' "$0" | sed 's/^# \{0,1\}//' ;;
+	*) die "Unbekannter Befehl: ${CMD}" 2 ;;
+esac

@@ -65,7 +65,7 @@
    "id": "g-netz",
    "title": "Netzwerk",
    "icon": "wifi",
-   "description": "WLAN, LAN"
+   "description": "WLAN, LAN, NetBird"
   },
   {
    "id": "g-dienste",
@@ -3372,6 +3372,16 @@
    ]
   },
   {
+   "id": "netbird",
+   "slug": "netbird",
+   "area": "einstellungen",
+   "parent": "g-netz",
+   "title": "NetBird",
+   "description": "Fernzugriff über dein VPN, NetBird-IP",
+   "icon": "globe",
+   "sections": []
+  },
+  {
    "id": "freigaben",
    "slug": "shares",
    "area": "einstellungen",
@@ -4769,7 +4779,7 @@
    "area": "einstellungen",
    "parent": "einstellungen",
    "title": "Netzwerk",
-   "description": "WLAN, LAN",
+   "description": "WLAN, LAN, NetBird",
    "icon": "wifi",
    "sections": [
     {
@@ -6074,6 +6084,31 @@
    "l": "Adresse neu holen",
    "where": "Netzwerk › LAN",
    "id": "lan"
+  },
+  {
+   "l": "NetBird",
+   "where": "Netzwerk › NetBird",
+   "id": "netbird"
+  },
+  {
+   "l": "VPN",
+   "where": "Netzwerk › NetBird",
+   "id": "netbird"
+  },
+  {
+   "l": "Fernzugriff",
+   "where": "Netzwerk › NetBird",
+   "id": "netbird"
+  },
+  {
+   "l": "Setup-Key",
+   "where": "Netzwerk › NetBird",
+   "id": "netbird"
+  },
+  {
+   "l": "Von unterwegs",
+   "where": "Netzwerk › NetBird",
+   "id": "netbird"
   },
   {
    "l": "DHCP erneuern",

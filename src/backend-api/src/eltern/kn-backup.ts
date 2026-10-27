@@ -30,7 +30,7 @@ const RULES = {
   snapshot: /^[0-9a-f]{8,64}$/,
 }
 
-interface Result {
+export interface Result {
   ok: boolean
   code: number | null
   stdout: string
@@ -38,7 +38,7 @@ interface Result {
 }
 
 /** A tool as root, with lines on stdin (password, key) */
-function sudo(args: string[], input: string[] = [], timeoutMs = 120000): Promise<Result> {
+export function sudo(args: string[], input: string[] = [], timeoutMs = 120000): Promise<Result> {
   return new Promise((resolve) => {
     const child = spawn('sudo', ['-n', ...args], { stdio: ['pipe', 'pipe', 'pipe'] })
     let stdout = ''
@@ -62,7 +62,7 @@ function sudo(args: string[], input: string[] = [], timeoutMs = 120000): Promise
   })
 }
 
-function parseJson(text: string): Record<string, unknown> | null {
+export function parseJson(text: string): Record<string, unknown> | null {
   try {
     const v = JSON.parse(text)
     return v && typeof v === 'object' ? v : null
@@ -72,7 +72,7 @@ function parseJson(text: string): Record<string, unknown> | null {
 }
 
 /** The tool's own message for the app: its JSON error, else its last line (German, made for the parents) */
-function toolError(r: Result): string {
+export function toolError(r: Result): string {
   const j = parseJson(r.stdout)
   if (j && typeof j.error === 'string') return j.error
   const last = (r.stderr || r.stdout).trim().split('\n').pop() ?? ''
