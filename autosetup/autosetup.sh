@@ -880,8 +880,19 @@ STEP=0
 	whiptail --title "MuPiBox Autosetup ${VERSION_LONG}" --gauge "Please wait while installing" 6 60 0
 else
 	# KN: without a terminal (the automatic installation at the first start) whiptail cannot draw - and when it ended,
-	# every step after it went into a closed pipe. The step names as plain lines instead.
-	awk '/^XXX$/ { n++; next } n % 2 == 1 && !/^[0-9]+$/ { print "    " $0; fflush() }'
+	# every step after it went into a closed pipe. The step names as plain lines instead - read line by line in bash:
+	# Debian's awk (mawk) buffers a pipe's input, the steps showed only in big blocks or not at all.
+	n=0
+	pct=0
+	while IFS= read -r line; do
+		if [ "${line}" = "XXX" ]; then
+			n=$((n + 1))
+		elif [ $((n % 2)) = 1 ] && [[ "${line}" =~ ^[0-9]+$ ]]; then
+			pct="${line}"
+		elif [ $((n % 2)) = 1 ]; then
+			printf '    [%3s %%] %s\n' "${pct}" "${line}"
+		fi
+	done
 fi
 
 # The log on the boot partition (/boot/firmware on newer systems): readable from the memory card on a PC too, when

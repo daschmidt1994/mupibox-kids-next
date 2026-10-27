@@ -181,7 +181,7 @@ if [ "${KN_MODE}" = "restore" ]; then
 fi
 
 # ---------------------------------------------------------------------------------------------------------------------
-kn_info "MuPiBox installieren (dauert auf einem Pi 3 etwa 20–40 Minuten)"
+kn_info "MuPiBox installieren (dauert je nach Pi und Internet etwa 20–40 Minuten, die Schritte erscheinen hier)"
 kn_log "autosetup.sh from ${KN_ROOT}"
 # autosetup shows its own progress bar (whiptail) and writes /tmp/autosetup.log; its exit code says whether
 # Node.js, mpv, Chromium and the server are there
