@@ -1,0 +1,411 @@
+#!/bin/bash
+#
+# MuPiBox Kids Next – Wiederherstellung aus dem NAS-Backup
+#
+#   mupi-kn-restore select [--state FILE]   NAS verbinden, Box und Backup wählen, Schlüssel prüfen, Backup prüfen
+#                                           (nichts auf der Box wird verändert außer den NAS-Einstellungen)
+#   mupi-kn-restore apply  [--state FILE]   das gewählte Backup einspielen (nach der Installation, vor dem Neustart)
+#
+# Für select ohne Rückfragen: --type nfs|smb|local --host H --share S [--dir D] --box NAME [--snapshot ID|latest]
+#   [--user U --password-stdin] [--key-stdin] (Schlüssel bzw. Passwort zeilenweise auf stdin, in dieser Reihenfolge)
+# Für apply: --netbird yes|no (Standard: fragen; ohne Terminal: nein), --yes
+#
+# Was nicht 1:1 zurückkommt, steht danach in /var/lib/mupibox-kn/restore-report.json (für den Assistenten der Eltern-App):
+# Bluetooth-Kopplungen nur auf demselben Pi (gleiche Bluetooth-Adresse), NetBird nur nach Bestätigung.
+
+# shellcheck disable=SC2034 # (settings used by name in backup-lib.sh)
+set -o pipefail
+KB_SELF_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+# shellcheck source=backup-lib.sh
+. "${KB_SELF_DIR}/backup-lib.sh"
+
+STATE="${KN_STATE_DIR}/restore-selection"
+STAGING="${KR_STAGING:-${KN_FS}/var/tmp/mupibox-kn-restore}"
+SKC="${KN_FS}${SKC_REL}"
+T="MuPiBox Kids Next – Wiederherstellung"
+
+die() { echo "✘ $1" >&2; kb_umount; exit "${2:-1}"; }
+interactive() { [ -t 0 ] && command -v whiptail >/dev/null; }
+
+# ---------------------------------------------------------------------------------------------------------------------
+cmd_select() {
+	local snapshot="" user="" password_stdin=0 key_stdin=0 key="" arg
+	kb_defaults
+	NAS_TYPE="" BOX_NAME=""
+	while [ $# -gt 0 ]; do
+		arg="$1"
+		case "${arg}" in
+			--state) STATE="$2"; shift ;;
+			--type) NAS_TYPE="$2"; shift ;;
+			--host) NAS_HOST="$2"; shift ;;
+			--share) NAS_SHARE="$2"; shift ;;
+			--dir) NAS_DIR="$2"; shift ;;
+			--box) BOX_NAME="$2"; shift ;;
+			--snapshot) snapshot="$2"; shift ;;
+			--user) user="$2"; shift ;;
+			--password-stdin) password_stdin=1 ;;
+			--key-stdin) key_stdin=1 ;;
+			*) die "Unbekannte Option für select: ${arg}" 2 ;;
+		esac
+		shift
+	done
+
+	# --- NAS --------------------------------------------------------------------------------------------------------
+	if [ -z "${NAS_TYPE}" ]; then
+		interactive || die "NAS fehlt (--type, --host, --share)." 2
+		NAS_TYPE=$(whiptail --title "${T}" --menu "Wie ist das NAS mit den Backups erreichbar?" 12 70 2 \
+			nfs "NFS (Linux-NAS, z. B. Unraid)" smb "SMB/Windows-Freigabe" 3>&1 1>&2 2>&3) || die "Abgebrochen."
+		NAS_HOST=$(whiptail --title "${T}" --inputbox "Adresse des NAS (IP oder Name):" 9 70 3>&1 1>&2 2>&3) || die "Abgebrochen."
+		if [ "${NAS_TYPE}" = nfs ]; then
+			NAS_SHARE=$(whiptail --title "${T}" --inputbox "NFS-Freigabe (Pfad, z. B. /mnt/user/backups):" 9 70 3>&1 1>&2 2>&3) || die "Abgebrochen."
+		else
+			NAS_SHARE=$(whiptail --title "${T}" --inputbox "SMB-Freigabe (Name, z. B. backups):" 9 70 3>&1 1>&2 2>&3) || die "Abgebrochen."
+			user=$(whiptail --title "${T}" --inputbox "Benutzername auf dem NAS:" 9 70 3>&1 1>&2 2>&3) || die "Abgebrochen."
+			local p
+			p=$(whiptail --title "${T}" --passwordbox "Passwort für ${user}:" 9 70 3>&1 1>&2 2>&3) || die "Abgebrochen."
+			printf '%s\n' "${p}" | kb_save_smb_credentials "${user}" || die "Zugangsdaten ungültig."
+		fi
+		NAS_DIR=$(whiptail --title "${T}" --inputbox "Ordner der Backups auf der Freigabe:" 9 70 "${NAS_DIR}" 3>&1 1>&2 2>&3) || die "Abgebrochen."
+	elif [ "${NAS_TYPE}" = smb ] && [ -n "${user}" ]; then
+		[ "${password_stdin}" = 1 ] || die "Für SMB fehlt das Passwort (--password-stdin)." 2
+		kb_save_smb_credentials "${user}" || die "Zugangsdaten ungültig."
+	fi
+	for k in NAS_TYPE NAS_SHARE NAS_DIR; do kb_valid "${k}" "${!k}" || die "Ungültige Angabe: ${k}='${!k}'"; done
+	[ "${NAS_TYPE}" = local ] || { [ -n "${NAS_HOST}" ] && kb_valid NAS_HOST "${NAS_HOST}"; } || die "Ungültige NAS-Adresse: '${NAS_HOST}'"
+
+	if [ "${KN_TEST}" != 1 ]; then
+		echo "Benötigte Programme installieren ..."
+		# shellcheck disable=SC2046
+		DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends $(kb_packages_for_type "${NAS_TYPE}") jq >/dev/null \
+			|| die "restic bzw. NAS-Programme konnten nicht installiert werden (Internet?)."
+		kb_quiet_rpcbind
+	fi
+
+	echo "NAS einbinden ..."
+	kb_mount || die "${KB_ERROR}"
+
+	# --- which box ---------------------------------------------------------------------------------------------------
+	local boxes=() d
+	for d in "${KB_NAS_ROOT}/${NAS_DIR}"/*/; do
+		[ -f "${d}config" ] && boxes+=("$(basename "${d}")")
+	done
+	[ ${#boxes[@]} -gt 0 ] || die "Unter ${NAS_DIR} auf dem NAS wurde kein MuPiBox-Backup gefunden."
+	if [ -z "${BOX_NAME}" ]; then
+		if [ ${#boxes[@]} -eq 1 ] && ! interactive; then
+			BOX_NAME="${boxes[0]}"
+		else
+			interactive || die "Mehrere Boxen auf dem NAS (${boxes[*]}) – bitte --box angeben." 2
+			local items=() b
+			for b in "${boxes[@]}"; do items+=("${b}" ""); done
+			BOX_NAME=$(whiptail --title "${T}" --menu "Von welcher Box soll wiederhergestellt werden?" 16 70 8 "${items[@]}" 3>&1 1>&2 2>&3) || die "Abgebrochen."
+		fi
+	fi
+	[[ " ${boxes[*]} " == *" ${BOX_NAME} "* ]] || die "Kein Backup für '${BOX_NAME}' auf dem NAS."
+
+	# --- key -----------------------------------------------------------------------------------------------------------
+	local tries=0
+	while :; do
+		if [ "${key_stdin}" = 1 ]; then
+			IFS= read -r key || die "Kein Wiederherstellungsschlüssel angegeben."
+		else
+			interactive || die "Der Wiederherstellungsschlüssel fehlt (--key-stdin)." 2
+			key=$(whiptail --title "${T}" --passwordbox "Wiederherstellungsschlüssel der Box '${BOX_NAME}':\n(30 Zeichen, Groß-/Kleinschreibung und Bindestriche egal)" 10 70 3>&1 1>&2 2>&3) || die "Abgebrochen."
+		fi
+		kb_save_key "$(kb_normalize_key "${key}")"
+		kb_restic cat config >/dev/null 2>&1 && break
+		tries=$((tries + 1))
+		if [ "${key_stdin}" = 1 ] || [ ${tries} -ge 3 ]; then
+			rm -f "${KB_KEY_FILE}"
+			die "Der Wiederherstellungsschlüssel passt nicht zum Backup von '${BOX_NAME}'."
+		fi
+		whiptail --title "${T}" --msgbox "Der Schlüssel passt nicht. Bitte noch einmal eingeben (Versuch $((tries + 1)) von 3)." 8 70
+	done
+	echo "✔ Schlüssel passt"
+
+	# --- which backup --------------------------------------------------------------------------------------------------
+	local snaps
+	snaps=$(kb_restic snapshots --json 2>/dev/null) || die "Die Backups konnten nicht gelesen werden."
+	[ "$(echo "${snaps}" | jq 'length')" -gt 0 ] || die "Für '${BOX_NAME}' gibt es noch kein Backup."
+	if [ -z "${snapshot}" ] && interactive; then
+		local items=()
+		mapfile -t items < <(echo "${snaps}" | jq -r 'sort_by(.time) | reverse | .[0:30][] |
+			.short_id, "\(.time[0:16] | sub("T"; " "))  Version \((.tags // []) | map(select(startswith("kn-"))) | first // "?" | ltrimstr("kn-"))  \(if ((.tags // []) | index("media")) then "mit Medien" else "ohne Medien" end)"')
+		snapshot=$(whiptail --title "${T}" --menu "Welches Backup soll wiederhergestellt werden? (neuestes oben)" 20 78 12 "${items[@]}" 3>&1 1>&2 2>&3) || die "Abgebrochen."
+	fi
+	[ -z "${snapshot}" ] || [ "${snapshot}" = latest ] && snapshot=$(echo "${snaps}" | jq -r 'sort_by(.time) | last | .short_id')
+	local snapjson
+	snapjson=$(echo "${snaps}" | jq --arg s "${snapshot}" '[.[] | select(.short_id == $s or .id == $s)] | first // empty')
+	[ -n "${snapjson}" ] || die "Backup ${snapshot} nicht gefunden."
+
+	# --- compatible? ---------------------------------------------------------------------------------------------------
+	local bver kver
+	bver=$(echo "${snapjson}" | jq -r '(.tags // []) | map(select(startswith("kn-"))) | first // "kn-0.0.0" | ltrimstr("kn-")')
+	kver=$(kb_kn_version)
+	if [ "$(printf '%s\n%s\n' "${bver}" "${kver}" | sort -V | tail -n 1)" != "${kver}" ]; then
+		die "Das Backup stammt von Kids Next ${bver}, installiert wird ${kver}. Bitte zuerst die neuere Version installieren (--ref)."
+	fi
+
+	# --- check ---------------------------------------------------------------------------------------------------------
+	echo "Prüfe das Backup auf dem NAS (kann einige Minuten dauern) ..."
+	local out
+	out=$(kb_restic check 2>&1) || die "Das Backup auf dem NAS ist beschädigt: $(echo "${out}" | tail -n 2 | tr '\n' ' ')"
+	echo "✔ Backup geprüft"
+	kb_umount
+
+	# The NAS settings are kept: the restored box goes on backing up into the same place, with the same key
+	ENABLED=1
+	kb_save_conf || die "NAS-Einstellungen konnten nicht gespeichert werden."
+	mkdir -p "$(dirname "${STATE}")"
+	jq -n --arg snap "$(echo "${snapjson}" | jq -r .short_id)" --arg box "${BOX_NAME}" --arg time "$(echo "${snapjson}" | jq -r .time)" \
+		--arg version "${bver}" --argjson media "$(echo "${snapjson}" | jq '(.tags // []) | index("media") != null')" \
+		'{snapshot: $snap, box: $box, time: $time, version: $version, media: $media}' > "${STATE}"
+	echo "✔ Ausgewählt: Backup vom $(echo "${snapjson}" | jq -r '.time[0:16] | sub("T"; " ")') (Box ${BOX_NAME}, Version ${bver})"
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Restore helpers: S is the staging folder with the box's paths below it
+
+put() {
+	# put <path of the box>: from staging over the box (files and folders), when it is in the backup
+	local p="$1" src="${S}${KN_FS}$1" dst="${KN_FS}$1"
+	[ -e "${src}" ] || [ -L "${src}" ] || return 0
+	mkdir -p "$(dirname "${dst}")"
+	if [ -d "${src}" ] && [ ! -L "${src}" ]; then
+		mkdir -p "${dst}"
+		cp -a "${src}/." "${dst}/" || { FAILED+=("${p}"); return 1; }
+	else
+		rm -rf "${dst}"
+		cp -a "${src}" "${dst}" || { FAILED+=("${p}"); return 1; }
+	fi
+	RESTORED+=("${p}")
+}
+
+# WiFi: the networks of the backup, plus the one the box is on right now (else a restore over WiFi takes it away)
+merge_wpa() {
+	local p=/etc/wpa_supplicant/wpa_supplicant.conf src dst
+	src="${S}${KN_FS}${p}"
+	dst="${KN_FS}${p}"
+	[ -f "${src}" ] || return 0
+	local current=""
+	[ -f "${dst}" ] && current=$(cat "${dst}")
+	cp -a "${src}" "${dst}" || { FAILED+=("${p}"); return 1; }
+	if [ -n "${current}" ]; then
+		# every network block of the current file whose ssid is not in the backup's is added at the end
+		awk -v known="$(grep -o 'ssid="[^"]*"' "${src}" | sort -u | tr '\n' '|')" '
+			/^[[:space:]]*network=\{/ { block = $0 "\n"; inblock = 1; ssid = ""; next }
+			inblock { block = block $0 "\n"; if ($0 ~ /^[[:space:]]*ssid="/) { s = $0; sub(/^[[:space:]]*/, "", s); ssid = s }
+				if ($0 ~ /^[[:space:]]*\}/) { inblock = 0; if (ssid != "" && index(known, ssid "|") == 0) printf "%s", block } }
+		' <<< "${current}" >> "${dst}"
+	fi
+	chmod 600 "${dst}"
+	RESTORED+=("${p}")
+}
+
+bt_controller() {
+	timeout 10 bluetoothctl list 2>/dev/null | awk '/^Controller/ { print toupper($2); exit }'
+}
+
+cmd_apply() {
+	local netbird=ask yes=0 arg
+	while [ $# -gt 0 ]; do
+		arg="$1"
+		case "${arg}" in
+			--state) STATE="$2"; shift ;;
+			--netbird) netbird="$2"; shift ;;
+			--yes) yes=1 ;;
+			*) die "Unbekannte Option für apply: ${arg}" 2 ;;
+		esac
+		shift
+	done
+	[ -f "${STATE}" ] || die "Kein Backup ausgewählt (mupi-kn-restore select)."
+	kb_load_conf || die "NAS-Einstellungen fehlen (mupi-kn-restore select)."
+	local snapshot media
+	snapshot=$(jq -r .snapshot "${STATE}")
+	media=$(jq -r .media "${STATE}")
+	[[ "${snapshot}" =~ ^[0-9a-f]{8,64}$ ]] || die "Ungültige Auswahl in ${STATE}."
+	RESTORED=() FAILED=() NEEDS=()
+
+	trap kb_umount EXIT
+	echo "NAS einbinden ..."
+	kb_mount || die "${KB_ERROR}"
+
+	# 1. everything but the media into a staging folder, checked file by file against the backup's checksums
+	echo "Einstellungen aus dem Backup holen ..."
+	rm -rf "${STAGING}"
+	mkdir -p "${STAGING}"
+	chmod 700 "${STAGING}"
+	local out
+	out=$(kb_restic restore "${snapshot}" --target "${STAGING}" \
+		--exclude "${KN_FS}/home/dietpi/MuPiBox/media" --exclude "${KN_FS}/home/dietpi/MuPiBox/podcasts" --verify 2>&1) \
+		|| die "Das Backup konnte nicht gelesen werden: $(echo "${out}" | tail -n 2 | tr '\n' ' ')"
+	# (the covers are below media/ but are no media: they come with the settings)
+	out=$(kb_restic restore "${snapshot}" --target "${STAGING}" --include "${KN_FS}/home/dietpi/MuPiBox/media/cover" --verify 2>&1) \
+		|| die "Die Cover konnten nicht gelesen werden: $(echo "${out}" | tail -n 1)"
+	S="${STAGING}"
+
+	# 2. the box's programs stop, so they do not write over what comes back
+	kb_sys sudo -H -u dietpi bash -c "pm2 stop server; pm2 stop spotify-control" >/dev/null 2>&1
+	local installed_version=""
+	[ -f "${KN_FS}/etc/mupibox/mupiboxconfig.json" ] && installed_version=$(jq -r '.mupibox.version // empty' "${KN_FS}/etc/mupibox/mupiboxconfig.json")
+
+	echo "Einstellungen zurückspielen ..."
+	# MuPiBox: settings (also the Spotify login and the parents' password), its HTTPS authority (phones keep trusting it)
+	put /etc/mupibox
+	# the library, progress, favourites, podcasts ... - without what the installation writes itself (as the update does it)
+	local f name
+	if [ -d "${S}${SKC}/server/config" ]; then
+		mkdir -p "${SKC}/server/config"
+		for f in "${S}${SKC}/server/config"/* "${S}${SKC}/server/config"/.[!.]*; do
+			[ -e "${f}" ] || continue
+			[ -L "${f}" ] && continue
+			name=$(basename "${f}")
+			case "${name}" in config.json|monitor.json|active_data.json|active_resume.json|network.json) continue ;; esac
+			put "${SKC_REL}/server/config/${name}"
+		done
+	fi
+	for f in cover rss-covers active_theme.css theme-data/custom; do put "${SKC_REL}/www/${f}"; done
+	for f in /home/dietpi/.mupibox/play_log.jsonl /home/dietpi/MuPiBox/themes /home/dietpi/MuPiBox/sysmedia/images/bootscreen-custom \
+		/home/dietpi/MuPiBox/tts_files /home/dietpi/MuPiBox/media/cover; do
+		put "${f}"
+	done
+	# Kids Next: its state and settings - but not the NAS settings and keys entered for this restore
+	if [ -d "${S}${KN_STATE_DIR}" ]; then
+		for f in "${S}${KN_STATE_DIR}"/*; do
+			[ -e "${f}" ] || continue
+			name=$(basename "${f}")
+			case "${name}" in restore-*|installed.json|.backup.lock) continue ;; esac
+			put "${KN_STATE_DIR#"${KN_FS}"}/${name}"
+		done
+	fi
+	if [ -d "${S}${KN_ETC_DIR}" ]; then
+		for f in "${S}${KN_ETC_DIR}"/*; do
+			[ -e "${f}" ] || continue
+			name=$(basename "${f}")
+			case "${name}" in backup.conf|secrets) continue ;; esac
+			put "${KN_ETC_DIR#"${KN_FS}"}/${name}"
+		done
+		for f in "${S}${KN_ETC_DIR}/secrets"/*; do
+			[ -e "${f}" ] || continue
+			name=$(basename "${f}")
+			case "${name}" in backup.key|nas.cred) continue ;; esac
+			put "${KN_ETC_DIR#"${KN_FS}"}/secrets/${name}"
+		done
+	fi
+
+	# WiFi: DietPi's / ifupdown's networks and NetworkManager's profiles (whatever the backup has)
+	merge_wpa
+	put /var/lib/dietpi/dietpi-wifi.db
+	put /etc/network/interfaces.d/mupibox-wifi
+	if [ -d "${S}${KN_FS}/etc/NetworkManager/system-connections" ]; then
+		put /etc/NetworkManager/system-connections
+		chmod 600 "${KN_FS}"/etc/NetworkManager/system-connections/* 2>/dev/null
+	fi
+
+	# Bluetooth: the pairings belong to the box's Bluetooth address; on another Pi the headphones have to be paired again
+	if [ -d "${S}${KN_FS}/var/lib/bluetooth" ]; then
+		local here old
+		here=$( [ "${KN_TEST}" = 1 ] && echo "${KR_BT_CONTROLLER}" || bt_controller )
+		old=$(find "${S}${KN_FS}/var/lib/bluetooth" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | head -n 1)
+		if [ -n "${here}" ] && [ "${here}" = "${old}" ]; then
+			put /var/lib/bluetooth
+			chmod 700 "${KN_FS}/var/lib/bluetooth" "${KN_FS}/var/lib/bluetooth/${here}" 2>/dev/null
+		elif [ -n "${old}" ]; then
+			NEEDS+=("bluetooth-pairing")
+		fi
+	fi
+
+	# NetBird: the box's identity in the VPN. Only after a yes - should the old card still run somewhere, two devices
+	# would share it.
+	if [ -d "${S}${KN_FS}/var/lib/netbird" ] || [ -d "${S}${KN_FS}/etc/netbird" ]; then
+		if [ "${netbird}" = ask ]; then
+			if [ "${yes}" != 1 ] && interactive && whiptail --title "${T}" --yesno "NetBird-Zugang der alten Box übernehmen?\n\nJa: nur wenn die alte SD-Karte nicht mehr benutzt wird.\nNein: NetBird später mit einem neuen Setup-Key verbinden." 12 70; then
+				netbird=yes
+			else
+				netbird=no
+			fi
+		fi
+		if [ "${netbird}" = yes ]; then
+			put /var/lib/netbird
+			put /etc/netbird
+		else
+			NEEDS+=("netbird-setup-key")
+		fi
+	fi
+
+	# 3. the media, straight into place (they can be big: no second copy on the card)
+	if [ "${media}" = true ]; then
+		echo "Lokale Hörspiele und Musik zurückspielen (kann lange dauern) ..."
+		if kb_restic restore "${snapshot}" --target / --include "${KN_FS}/home/dietpi/MuPiBox/media" \
+			--include "${KN_FS}/home/dietpi/MuPiBox/podcasts" --verify >/dev/null 2>&1; then
+			RESTORED+=("/home/dietpi/MuPiBox/media")
+		else
+			FAILED+=("/home/dietpi/MuPiBox/media")
+		fi
+	fi
+	kb_umount
+	trap - EXIT
+
+	# 4. owners and rights as the installation sets them
+	if [ "${KN_TEST}" != 1 ]; then
+		chown -R dietpi:dietpi /home/dietpi/.mupibox /home/dietpi/MuPiBox 2>/dev/null
+		chown dietpi:dietpi /etc/mupibox/mupiboxconfig.json
+		chmod 775 /etc/mupibox/mupiboxconfig.json
+		chown -R root:root /etc/mupibox-kn /var/lib/mupibox-kn
+		chmod 700 /etc/mupibox-kn/secrets
+		chmod 600 /etc/mupibox-kn/secrets/* 2>/dev/null
+	fi
+
+	# 5. as upstream's restore: the config brought up to this version (its version kept), then what it switches on
+	if [ -n "${installed_version}" ] && [ -f "${KN_FS}/etc/mupibox/mupiboxconfig.json" ]; then
+		kb_sys /usr/local/bin/mupibox/conf_update.sh >/dev/null 2>&1
+		local tmp="${KN_FS}/etc/mupibox/mupiboxconfig.json.kn-restore"
+		if jq --arg v "${installed_version}" '.mupibox.version = $v' "${KN_FS}/etc/mupibox/mupiboxconfig.json" > "${tmp}" && [ -s "${tmp}" ]; then
+			chown --reference="${KN_FS}/etc/mupibox/mupiboxconfig.json" "${tmp}" 2>/dev/null
+			chmod --reference="${KN_FS}/etc/mupibox/mupiboxconfig.json" "${tmp}"
+			mv -f "${tmp}" "${KN_FS}/etc/mupibox/mupiboxconfig.json"
+		else
+			rm -f "${tmp}"
+		fi
+	fi
+	kb_sys /usr/local/bin/mupibox/apply_restored_settings.sh >/dev/null 2>&1
+	local host=""
+	[ -f "${KN_FS}/etc/mupibox/mupiboxconfig.json" ] && host=$(jq -r '.mupibox.host // empty' "${KN_FS}/etc/mupibox/mupiboxconfig.json")
+	if [[ "${host}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]; then
+		kb_sys /boot/dietpi/func/change_hostname "${host}" >/dev/null 2>&1
+		kb_sys su dietpi -c /usr/local/bin/mupibox/set_hostname.sh >/dev/null 2>&1
+	fi
+	rm -rf "${STAGING}"
+
+	# 6. the report for the app's assistant
+	local report="${KN_STATE_DIR}/restore-report.json"
+	jq -n --slurpfile sel "${STATE}" --arg d "$(date -Iseconds)" \
+		--argjson restored "$(printf '%s\n' "${RESTORED[@]}" | jq -R . | jq -s 'map(select(. != ""))')" \
+		--argjson failed "$(printf '%s\n' "${FAILED[@]}" | jq -R . | jq -s 'map(select(. != ""))')" \
+		--argjson needs "$(printf '%s\n' "${NEEDS[@]}" | jq -R . | jq -s 'map(select(. != ""))')" \
+		'{date: $d, backup: $sel[0], ok: ($failed | length == 0), restored: $restored, failed: $failed, needs: $needs}' > "${report}"
+
+	echo "✔ ${#RESTORED[@]} Bereiche wiederhergestellt"
+	local n
+	for n in "${NEEDS[@]}"; do
+		case "${n}" in
+			bluetooth-pairing) echo "  ! Bluetooth-Kopfhörer bitte neu koppeln (anderer Pi als im Backup)." ;;
+			netbird-setup-key) echo "  ! NetBird bitte in der Eltern-App mit einem neuen Setup-Key verbinden." ;;
+		esac
+	done
+	if [ ${#FAILED[@]} -gt 0 ]; then
+		echo "✘ Nicht wiederhergestellt: ${FAILED[*]}" >&2
+		return 1
+	fi
+	return 0
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+[ "$(id -u)" = 0 ] || [ "${KN_TEST}" = 1 ] || { echo "Bitte als root starten (sudo)." >&2; exit 1; }
+CMD="${1:-help}"
+shift
+case "${CMD}" in
+	select) cmd_select "$@" ;;
+	apply) cmd_apply "$@" ;;
+	help|--help|-h) sed -n '3,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+	*) echo "Unbekannter Befehl: ${CMD} (select, apply)" >&2; exit 2 ;;
+esac

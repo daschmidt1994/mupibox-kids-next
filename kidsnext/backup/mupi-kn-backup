@@ -1,0 +1,412 @@
+#!/bin/bash
+#
+# MuPiBox Kids Next – NAS-Backup
+#
+#   mupi-kn-backup setup     NAS einrichten bzw. ändern, Repository anlegen, Wiederherstellungsschlüssel erzeugen
+#   mupi-kn-backup run       Backup jetzt (vom Timer: --auto wartet, bis nichts mehr spielt)
+#   mupi-kn-backup list      vorhandene Backups
+#   mupi-kn-backup status    Einstellungen, letzte Läufe, nächster Termin
+#   mupi-kn-backup check     vollständige Prüfung aller Daten auf dem NAS
+#   mupi-kn-backup show-key  den Wiederherstellungsschlüssel noch einmal anzeigen
+# Mit --json antworten run/list/status/check für die Eltern-App in JSON.
+#
+# Ein Backup gilt erst als erfolgreich, wenn es auf dem NAS liegt UND geprüft ist: Struktur des Repositorys, ein Teil der
+# Daten (rollierend, in einer Woche alles) und eine Probe-Wiederherstellung der Einstellungen mit Prüfsummen.
+
+set -o pipefail
+KB_SELF_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+# shellcheck source=backup-lib.sh
+. "${KB_SELF_DIR}/backup-lib.sh"
+
+JSON=0
+die() {
+	if [ "${JSON}" = 1 ]; then jq -n --arg e "$1" '{ok: false, error: $e}'; else echo "✘ $1" >&2; fi
+	exit "${2:-1}"
+}
+say() { [ "${JSON}" = 1 ] || echo "$*"; }
+
+require_root() { [ "$(id -u)" = 0 ] || [ "${KN_TEST}" = 1 ] || die "Bitte als root starten (sudo)."; }
+
+# ---------------------------------------------------------------------------------------------------------------------
+cmd_setup() {
+	local user="" password_stdin=0 key_stdin=0 yes=0 arg
+	kb_load_conf || true
+	while [ $# -gt 0 ]; do
+		arg="$1"
+		case "${arg}" in
+			--type) NAS_TYPE="$2"; shift ;;
+			--host) NAS_HOST="$2"; shift ;;
+			--share) NAS_SHARE="$2"; shift ;;
+			--dir) NAS_DIR="$2"; shift ;;
+			--box) BOX_NAME="$2"; shift ;;
+			--user) user="$2"; shift ;;
+			--password-stdin) password_stdin=1 ;;
+			--key-stdin) key_stdin=1 ;;
+			--media) INCLUDE_MEDIA="$2"; shift ;;
+			--time) SCHEDULE_TIME="$2"; shift ;;
+			--days) SCHEDULE_DAYS="$2"; shift ;;
+			--keep-daily) KEEP_DAILY="$2"; shift ;;
+			--keep-weekly) KEEP_WEEKLY="$2"; shift ;;
+			--keep-monthly) KEEP_MONTHLY="$2"; shift ;;
+			--enable) ENABLED=1 ;;
+			--disable) ENABLED=0 ;;
+			--yes) yes=1 ;;
+			*) die "Unbekannte Option für setup: ${arg}" 2 ;;
+		esac
+		shift
+	done
+
+	# Asked on the terminal for what is missing (the app always passes everything)
+	if [ -t 0 ] && command -v whiptail >/dev/null && [ "${yes}" != 1 ]; then
+		setup_dialog || die "Abgebrochen."
+	fi
+	local key
+	for key in NAS_TYPE NAS_SHARE NAS_DIR BOX_NAME INCLUDE_MEDIA SCHEDULE_TIME SCHEDULE_DAYS KEEP_DAILY KEEP_WEEKLY KEEP_MONTHLY; do
+		kb_valid "${key}" "${!key}" || die "Ungültige Angabe: ${key}='${!key}'"
+	done
+	[ "${NAS_TYPE}" = local ] || { [ -n "${NAS_HOST}" ] && kb_valid NAS_HOST "${NAS_HOST}"; } || die "Ungültige NAS-Adresse: '${NAS_HOST}'"
+
+	if [ "${KN_TEST}" != 1 ]; then
+		# shellcheck disable=SC2046
+		missing_pkgs $(kb_packages_for_type "${NAS_TYPE}") || die "Pakete konnten nicht installiert werden (Internet?)."
+	fi
+	if [ "${NAS_TYPE}" = smb ]; then
+		if [ -n "${user}" ]; then
+			if [ "${password_stdin}" = 1 ]; then
+				kb_save_smb_credentials "${user}" || die "Zugangsdaten nicht gespeichert."
+			else
+				die "Für SMB fehlt das Passwort (--password-stdin)."
+			fi
+		fi
+		[ -f "${KB_CRED_FILE}" ] || die "Für SMB fehlen Benutzer und Passwort (--user, --password-stdin)."
+	fi
+
+	trap kb_umount EXIT
+	kb_mount || die "${KB_ERROR}"
+
+	local new_key="" given_key=""
+	if [ "${key_stdin}" = 1 ]; then
+		IFS= read -r given_key
+		given_key=$(kb_normalize_key "${given_key}")
+	fi
+
+	if kb_repo_exists; then
+		# An existing backup of this box (set up again, or after a restore): its key is needed, a new one would not open it
+		if [ -n "${given_key}" ]; then
+			kb_save_key "${given_key}"
+		elif [ ! -s "${KB_KEY_FILE}" ]; then
+			die "Auf dem NAS gibt es schon ein Backup für '${BOX_NAME}'. Bitte dessen Wiederherstellungsschlüssel angeben (--key-stdin)."
+		fi
+		kb_restic cat config >/dev/null 2>&1 || die "Der Wiederherstellungsschlüssel passt nicht zum Backup '${BOX_NAME}' auf dem NAS."
+		say "✔ Vorhandenes Backup '${BOX_NAME}' auf dem NAS gefunden, Schlüssel passt."
+	else
+		if [ -n "${given_key}" ]; then
+			kb_save_key "${given_key}"
+		elif [ ! -s "${KB_KEY_FILE}" ]; then
+			new_key=$(kb_generate_key)
+			kb_save_key "${new_key}"
+		fi
+		mkdir -p "$(dirname "$(kb_repo)")"
+		local out
+		out=$(kb_restic init 2>&1) || die "Backup-Speicher auf dem NAS konnte nicht angelegt werden: $(echo "${out}" | tail -n 1)"
+		say "✔ Backup-Speicher angelegt: ${NAS_DIR}/${BOX_NAME}"
+	fi
+	kb_umount
+	trap - EXIT
+
+	kb_save_conf || die "Einstellungen nicht gespeichert."
+	install_timer
+
+	if [ "${JSON}" = 1 ]; then
+		jq -n --arg key "${new_key}" --arg box "${BOX_NAME}" '{ok: true, box: $box, newKey: (if $key == "" then null else $key end)}'
+	elif [ -n "${new_key}" ]; then
+		cat <<EOF
+
+  ┌──────────────────────────────────────────────────────────────────┐
+  │  WIEDERHERSTELLUNGSSCHLÜSSEL – bitte jetzt aufschreiben!         │
+  │                                                                  │
+  │      ${new_key}                         │
+  │                                                                  │
+  │  Ohne diesen Schlüssel lässt sich das Backup nach einem Defekt   │
+  │  der SD-Karte NICHT wiederherstellen. Er wird nur auf der Box    │
+  │  gespeichert, die kaputt gehen kann.                             │
+  └──────────────────────────────────────────────────────────────────┘
+
+EOF
+	fi
+}
+
+setup_dialog() {
+	local t="MuPiBox Kids Next – NAS-Backup"
+	NAS_TYPE=$(whiptail --title "${t}" --default-item "${NAS_TYPE:-nfs}" --menu "Wie ist das NAS erreichbar?" 12 70 2 \
+		nfs "NFS (Linux-NAS, z. B. Unraid)" smb "SMB/Windows-Freigabe" 3>&1 1>&2 2>&3) || return 1
+	NAS_HOST=$(whiptail --title "${t}" --inputbox "Adresse des NAS (IP oder Name):" 9 70 "${NAS_HOST}" 3>&1 1>&2 2>&3) || return 1
+	if [ "${NAS_TYPE}" = nfs ]; then
+		NAS_SHARE=$(whiptail --title "${t}" --inputbox "NFS-Freigabe (Pfad, z. B. /mnt/user/backups):" 9 70 "${NAS_SHARE}" 3>&1 1>&2 2>&3) || return 1
+	else
+		NAS_SHARE=$(whiptail --title "${t}" --inputbox "SMB-Freigabe (Name, z. B. backups):" 9 70 "${NAS_SHARE}" 3>&1 1>&2 2>&3) || return 1
+		local u p
+		u=$(whiptail --title "${t}" --inputbox "Benutzername auf dem NAS:" 9 70 3>&1 1>&2 2>&3) || return 1
+		p=$(whiptail --title "${t}" --passwordbox "Passwort für ${u}:" 9 70 3>&1 1>&2 2>&3) || return 1
+		printf '%s\n' "${p}" | kb_save_smb_credentials "${u}" || return 1
+	fi
+	NAS_DIR=$(whiptail --title "${t}" --inputbox "Ordner für die Backups auf der Freigabe:" 9 70 "${NAS_DIR}" 3>&1 1>&2 2>&3) || return 1
+	BOX_NAME=$(whiptail --title "${t}" --inputbox "Name dieser Box (eigener Unterordner):" 9 70 "${BOX_NAME}" 3>&1 1>&2 2>&3) || return 1
+	if whiptail --title "${t}" --defaultno --yesno "Lokale Hörspiele und Musik mitsichern?\n\n(Ohne: nur Einstellungen, Medienliste, Positionen, Cover, WLAN, Bluetooth, Spotify.)" 11 70; then
+		INCLUDE_MEDIA=1
+	else
+		INCLUDE_MEDIA=0
+	fi
+	SCHEDULE_TIME=$(whiptail --title "${t}" --inputbox "Uhrzeit für das automatische Backup (HH:MM):" 9 70 "${SCHEDULE_TIME}" 3>&1 1>&2 2>&3) || return 1
+	SCHEDULE_DAYS=$(whiptail --title "${t}" --default-item "${SCHEDULE_DAYS}" --menu "Wie oft?" 11 70 2 \
+		daily "täglich" Sun "wöchentlich (Sonntag)" 3>&1 1>&2 2>&3) || return 1
+	ENABLED=1
+}
+
+missing_pkgs() {
+	local p missing=()
+	for p in "$@"; do dpkg-query -W -f='${Status}' "${p}" 2>/dev/null | grep -q "install ok installed" || missing+=("${p}"); done
+	[ ${#missing[@]} -eq 0 ] && return 0
+	DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends "${missing[@]}" >/dev/null || return 1
+	kb_quiet_rpcbind
+}
+
+install_timer() {
+	[ "${KN_TEST}" = 1 ] && return 0
+	local cal
+	if [ "${SCHEDULE_DAYS}" = daily ]; then cal="*-*-* ${SCHEDULE_TIME}:00"; else cal="${SCHEDULE_DAYS} *-*-* ${SCHEDULE_TIME}:00"; fi
+	cat > /etc/systemd/system/mupi-kn-backup.timer <<EOF
+[Unit]
+Description=MuPiBox Kids Next: automatisches NAS-Backup
+
+[Timer]
+OnCalendar=${cal}
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target
+EOF
+	systemctl daemon-reload
+	if [ "${ENABLED}" = 1 ]; then
+		systemctl enable --now mupi-kn-backup.timer >/dev/null 2>&1
+	else
+		systemctl disable --now mupi-kn-backup.timer >/dev/null 2>&1
+	fi
+	return 0
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Is something playing? Then the automatic backup waits (the NAS traffic and the CPU of a Pi 3 would make it stutter).
+playing() {
+	local out
+	for env in "" "XDG_RUNTIME_DIR=/run/user/$(id -u dietpi 2>/dev/null)"; do
+		# shellcheck disable=SC2086
+		out=$(env ${env} timeout 5 pactl list short sink-inputs 2>/dev/null) || continue
+		[ -n "${out}" ] && return 0
+		return 1
+	done
+	return 1
+}
+
+cmd_run() {
+	local mode=manual arg
+	for arg in "$@"; do
+		case "${arg}" in
+			--auto) mode=auto ;;
+			*) die "Unbekannte Option für run: ${arg}" 2 ;;
+		esac
+	done
+	kb_load_conf || die "Das NAS-Backup ist noch nicht eingerichtet (mupi-kn-backup setup)."
+	[ -s "${KB_KEY_FILE}" ] || die "Der Wiederherstellungsschlüssel fehlt auf der Box (mupi-kn-backup setup)."
+	if [ "${mode}" = auto ] && [ "${ENABLED}" != 1 ]; then
+		say "Automatisches Backup ist ausgeschaltet."
+		exit 0
+	fi
+
+	local lockdir="${KN_FS}/run"
+	[ -d "${lockdir}" ] || lockdir="${KN_STATE_DIR}"
+	exec 7> "${lockdir}/mupibox-kn-backup.lock"
+	flock -n 7 || die "Es läuft bereits ein Backup."
+
+	if [ "${mode}" = auto ]; then
+		local waited=0
+		while playing && [ ${waited} -lt 7200 ]; do
+			sleep 60
+			waited=$((waited + 60))
+		done
+	fi
+
+	local started stage snap="" added=0 processed=0 files=0 repo_size=0 out version
+	started=$(date +%s)
+	version=$(kb_kn_version)
+	trap kb_umount EXIT
+
+	fail() {
+		local msg="$1" entry
+		entry=$(jq -n --arg d "$(date -Iseconds)" --arg mode "${mode}" --arg stage "${stage}" --arg e "${msg}" \
+			--argjson dur $(( $(date +%s) - started )) \
+			'{date: $d, ok: false, mode: $mode, stage: $stage, error: $e, duration: $dur}')
+		kb_history_add "${entry}"
+		kb_umount
+		die "Backup fehlgeschlagen (${stage}): ${msg}"
+	}
+
+	stage="nas"
+	say "NAS einbinden ..."
+	kb_mount || fail "${KB_ERROR}"
+	kb_repo_exists || fail "Backup-Speicher $(kb_repo) fehlt auf dem NAS – Backup neu einrichten."
+
+	# (a lock left by a backup that was cut off by a power cut; restic only removes locks that are stale)
+	kb_restic unlock >/dev/null 2>&1
+
+	stage="backup"
+	local paths=() excludes
+	mapfile -t paths < <(kb_config_paths)
+	[ "${INCLUDE_MEDIA}" = 1 ] && mapfile -t -O "${#paths[@]}" paths < <(kb_media_paths)
+	excludes=$(mktemp)
+	kb_excludes > "${excludes}"
+	say "Sichere ${#paths[@]} Bereiche$([ "${INCLUDE_MEDIA}" = 1 ] && echo " (mit Medien)") ..."
+	out=$(kb_restic backup --json --host "${BOX_NAME}" --tag "kn-${version}" --tag "$([ "${INCLUDE_MEDIA}" = 1 ] && echo media || echo config)" \
+		--tag "${mode}" --exclude-file "${excludes}" "${paths[@]}" 2>&1)
+	local rc=$?
+	rm -f "${excludes}"
+	# exit code 3: some files could not be read (one changing while read) - the snapshot is there; anything else failed
+	if [ ${rc} -ne 0 ] && [ ${rc} -ne 3 ]; then
+		fail "$(echo "${out}" | grep -v '^{' | tail -n 2 | tr '\n' ' ')"
+	fi
+	local summary
+	summary=$(echo "${out}" | grep '"message_type":"summary"' | tail -n 1)
+	snap=$(echo "${summary}" | jq -r '.snapshot_id // empty' 2>/dev/null)
+	added=$(echo "${summary}" | jq -r '.data_added // 0' 2>/dev/null)
+	processed=$(echo "${summary}" | jq -r '.total_bytes_processed // 0' 2>/dev/null)
+	files=$(echo "${summary}" | jq -r '.total_files_processed // 0' 2>/dev/null)
+	[ -n "${snap}" ] || fail "restic hat keinen Snapshot gemeldet"
+
+	stage="verify"
+	say "Prüfe das Backup auf dem NAS ..."
+	# 1. the snapshot is in the repository
+	kb_restic snapshots --json "${snap}" 2>/dev/null | jq -e 'length == 1' >/dev/null || fail "Snapshot ${snap} ist auf dem NAS nicht auffindbar"
+	# 2. structure of the repository, and a part of all data read back (another seventh each day: all of it in a week)
+	out=$(kb_restic check --read-data-subset "$(date +%u)/7" 2>&1) || fail "Prüfung des Repositorys: $(echo "${out}" | tail -n 2 | tr '\n' ' ')"
+	# 3. a test restore of the settings from the new snapshot, every file checked against its checksum
+	local probe
+	probe=$(mktemp -d)
+	out=$(kb_restic restore "${snap}" --target "${probe}" --include "${KN_FS}/etc/mupibox" --verify 2>&1)
+	rc=$?
+	if [ ${rc} -ne 0 ] || { [ -f "${KN_FS}/etc/mupibox/mupiboxconfig.json" ] && ! jq -e . "${probe}${KN_FS}/etc/mupibox/mupiboxconfig.json" >/dev/null 2>&1; }; then
+		rm -rf "${probe}"
+		fail "Probe-Wiederherstellung fehlgeschlagen: $(echo "${out}" | tail -n 1)"
+	fi
+	rm -rf "${probe}"
+
+	stage="cleanup"
+	local prune=()
+	# (forgetting is cheap; prune rewrites data on the NAS, once a week or when started by hand)
+	if [ "$(date +%u)" = 7 ] || [ "${mode}" = manual ]; then prune=(--prune); fi
+	out=$(kb_restic forget --host "${BOX_NAME}" --keep-daily "${KEEP_DAILY}" --keep-weekly "${KEEP_WEEKLY}" \
+		--keep-monthly "${KEEP_MONTHLY}" --keep-last 1 "${prune[@]}" 2>&1) || fail "Alte Backups aufräumen: $(echo "${out}" | tail -n 1)"
+	repo_size=$(kb_restic stats --json --mode raw-data 2>/dev/null | jq -r '.total_size // 0')
+	kb_umount
+	trap - EXIT
+
+	local entry
+	entry=$(jq -n --arg d "$(date -Iseconds)" --arg mode "${mode}" --arg snap "${snap}" --arg v "${version}" \
+		--argjson media "${INCLUDE_MEDIA}" --argjson added "${added:-0}" --argjson processed "${processed:-0}" \
+		--argjson files "${files:-0}" --argjson repo "${repo_size:-0}" --argjson dur $(( $(date +%s) - started )) \
+		--argjson warn "$([ ${rc} -eq 3 ] && echo true || echo false)" \
+		'{date: $d, ok: true, mode: $mode, snapshot: $snap, version: $v, media: ($media == 1), dataAdded: $added,
+		  size: $processed, files: $files, repoSize: $repo, duration: $dur, unreadableFiles: $warn}')
+	kb_history_add "${entry}"
+	if [ "${JSON}" = 1 ]; then
+		echo "${entry}"
+	else
+		echo "✔ Backup ${snap} gespeichert und geprüft: $(kb_human "${processed}") gesichert, $(kb_human "${added}") neu, NAS gesamt $(kb_human "${repo_size}")"
+	fi
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+cmd_list() {
+	kb_load_conf || die "Das NAS-Backup ist noch nicht eingerichtet."
+	trap kb_umount EXIT
+	kb_mount || die "${KB_ERROR}"
+	local out
+	out=$(kb_restic snapshots --json 2>/dev/null) || die "Backups konnten nicht gelesen werden (Schlüssel oder NAS)."
+	if [ "${JSON}" = 1 ]; then
+		echo "${out}" | jq '[.[] | {id: .short_id, date: .time, host: .hostname, tags: (.tags // []),
+			version: ((.tags // []) | map(select(startswith("kn-"))) | first // "" | ltrimstr("kn-")),
+			media: ((.tags // []) | index("media") != null), size: (.summary.total_bytes_processed // null)}] | reverse'
+	else
+		echo "${out}" | jq -r 'reverse | .[] | "\(.short_id)  \(.time[0:16] | sub("T"; " "))  \((.tags // []) | join(" "))"'
+	fi
+}
+
+cmd_status() {
+	local configured=true
+	kb_load_conf || configured=false
+	local next=""
+	[ "${KN_TEST}" = 1 ] || next=$(systemctl show mupi-kn-backup.timer -p NextElapseUSecRealtime --value 2>/dev/null)
+	[ -s "${KB_HISTORY}" ] || echo '[]' > "${KB_HISTORY}" 2>/dev/null
+	local hist
+	hist=$(cat "${KB_HISTORY}" 2>/dev/null || echo '[]')
+	if [ "${JSON}" = 1 ]; then
+		jq -n --argjson configured "${configured}" --arg type "${NAS_TYPE}" --arg host "${NAS_HOST}" --arg share "${NAS_SHARE}" \
+			--arg dir "${NAS_DIR}" --arg box "${BOX_NAME}" --argjson enabled "${ENABLED}" --argjson media "${INCLUDE_MEDIA}" \
+			--arg time "${SCHEDULE_TIME}" --arg days "${SCHEDULE_DAYS}" --arg next "${next}" --argjson h "${hist}" \
+			--argjson kd "${KEEP_DAILY}" --argjson kw "${KEEP_WEEKLY}" --argjson km "${KEEP_MONTHLY}" \
+			--argjson haskey "$([ -s "${KB_KEY_FILE}" ] && echo true || echo false)" '
+			{configured: $configured, enabled: ($enabled == 1), nas: {type: $type, host: $host, share: $share, dir: $dir},
+			 box: $box, includeMedia: ($media == 1), schedule: {time: $time, days: $days, next: $next},
+			 keep: {daily: $kd, weekly: $kw, monthly: $km}, keyOnBox: $haskey,
+			 lastOk: ([$h[] | select(.ok)] | last), lastRun: ($h | last),
+			 failedSinceOk: ($h | (map(.ok) | rindex(true)) as $i | .[(($i // -1) + 1):] | length),
+			 history: ($h | reverse | .[0:20])}'
+	else
+		if [ "${configured}" != true ]; then echo "NAS-Backup: nicht eingerichtet"; return 0; fi
+		echo "NAS-Backup: ${NAS_TYPE}://${NAS_HOST}${NAS_SHARE:+ ${NAS_SHARE}} → ${NAS_DIR}/${BOX_NAME}"
+		echo "Automatisch: $([ "${ENABLED}" = 1 ] && echo "ja, ${SCHEDULE_DAYS} um ${SCHEDULE_TIME}" || echo nein)${next:+ (nächster Lauf ${next})}"
+		echo "Medien: $([ "${INCLUDE_MEDIA}" = 1 ] && echo ja || echo nein); Aufbewahrung: ${KEEP_DAILY} täglich, ${KEEP_WEEKLY} wöchentlich, ${KEEP_MONTHLY} monatlich"
+		echo "${hist}" | jq -r '([.[] | select(.ok)] | last) as $ok | (last) as $l |
+			"Letztes erfolgreiches Backup: \($ok.date // "noch keines")",
+			(if $l and ($l.ok | not) then "Letzter Lauf FEHLGESCHLAGEN (\($l.date)): \($l.error)" else empty end)'
+	fi
+}
+
+cmd_check() {
+	local full=0
+	[ "$1" = "--full" ] && full=1
+	kb_load_conf || die "Das NAS-Backup ist noch nicht eingerichtet."
+	trap kb_umount EXIT
+	kb_mount || die "${KB_ERROR}"
+	local out args=()
+	[ "${full}" = 1 ] && args=(--read-data)
+	if out=$(kb_restic check "${args[@]}" 2>&1); then
+		if [ "${JSON}" = 1 ]; then jq -n --argjson full "${full}" '{ok: true, full: ($full == 1)}'; else echo "✔ Backup auf dem NAS ist in Ordnung$([ "${full}" = 1 ] && echo " (alle Daten gelesen)")."; fi
+	else
+		die "Prüfung fehlgeschlagen: $(echo "${out}" | tail -n 3 | tr '\n' ' ')"
+	fi
+}
+
+cmd_show_key() {
+	[ -s "${KB_KEY_FILE}" ] || die "Auf dieser Box ist kein Wiederherstellungsschlüssel gespeichert."
+	cat "${KB_KEY_FILE}"
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+ARGS=()
+for a in "$@"; do
+	if [ "${a}" = "--json" ]; then JSON=1; else ARGS+=("${a}"); fi
+done
+set -- "${ARGS[@]}"
+CMD="${1:-help}"
+shift
+case "${CMD}" in
+	setup) require_root; cmd_setup "$@" ;;
+	run) require_root; cmd_run "$@" ;;
+	list) require_root; cmd_list "$@" ;;
+	status) cmd_status "$@" ;;
+	check) require_root; cmd_check "$@" ;;
+	show-key) require_root; cmd_show_key ;;
+	help|--help|-h) sed -n '3,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+	*) die "Unbekannter Befehl: ${CMD} (setup, run, list, status, check, show-key)" 2 ;;
+esac

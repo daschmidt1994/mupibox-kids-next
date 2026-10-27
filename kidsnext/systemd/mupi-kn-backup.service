@@ -1,0 +1,14 @@
+[Unit]
+Description=MuPiBox Kids Next: NAS-Backup
+Documentation=https://github.com/daschmidt1994/mupibox-kids-next/tree/kids-next/kidsnext/docs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/mupibox-kn/app/backup/mupi-kn-backup run --auto
+# the box keeps playing smoothly while it runs
+Nice=15
+IOSchedulingClass=idle
+CPUWeight=20
+TimeoutStartSec=6h

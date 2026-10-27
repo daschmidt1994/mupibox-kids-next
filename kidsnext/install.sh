@@ -162,6 +162,8 @@ fi
 kn_log "mode=${KN_MODE} existing=${KN_EXISTING} version=${KN_VERSION}"
 
 KN_RESTORE_HELPER="${KN_ROOT}/kidsnext/backup/mupi-kn-restore"
+# (the version the restore compares a backup with: this one, which is about to be installed)
+export KB_VERSION_FILE="${KN_ROOT}/kidsnext/VERSION"
 if [ "${KN_MODE}" = "restore" ]; then
 	# The backup is chosen and checked before anything is installed: a wrong key or an unreachable NAS stops here,
 	# with the SD card still untouched
@@ -185,7 +187,7 @@ cat /tmp/autosetup.log >> "${KN_LOG}" 2>/dev/null
 kn_ok "MuPiBox-Grundinstallation fertig"
 
 # Kids Next modules, in this order; each is idempotent and may be run again on its own (kidsnext/installer/<name>.sh)
-KN_MODULES=(base)
+KN_MODULES=(base backup)
 for module in "${KN_MODULES[@]}"; do
 	file="${KN_INSTALLER}/${module}.sh"
 	[ -f "${file}" ] || kn_die "Installer-Modul ${module} fehlt."

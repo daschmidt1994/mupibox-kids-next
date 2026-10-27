@@ -35,6 +35,16 @@ RFID-Tests (Master-Prompt 9–11, 58) entfallen, weil RFID nicht gewünscht ist.
 | 26–38 | WLAN intern/USB, Treiber, Suche, Profile, Fallback, Hotspot | | | OFFEN | | |
 | 39–46 | Spotify verbinden, OAuth, Playlists, Wiedergabe, über BT, zuhause/unterwegs, nach WLAN-Wechsel | | | OFFEN | | |
 | 47–49 | NetBird verbinden, nach Netzwechsel, Eltern-App über NetBird | | | OFFEN | | |
-| 50–57 | NAS, Backup manuell/automatisch, Integrität, Verschlüsselung, Restore neue SD | | | OFFEN | | |
+| A5 | Backup-Repository anlegen, Schlüssel erzeugen (Format, Rechte 600, einmalige Anzeige), erneutes Einrichten behält den Schlüssel | | wie erwartet | AUTO (27.10.2026, restic 0.18.0, NAS = lokaler Ordner) | | |
+| A6 | Backup mit Medien: gespeichert, geprüft (Snapshot, check, Probe-Restore mit Prüfsummen), Verlauf, `list`/`status` JSON | | wie erwartet | AUTO (27.10.2026) | | |
+| A7 | Verschlüsselung: Spotify-Token nicht im Klartext auf dem NAS; Schlüssel selbst nicht im Backup | | wie erwartet | AUTO (27.10.2026) | | |
+| A8 | NAS nicht erreichbar: Backup schlägt sauber fehl, Fehler im Verlauf | | wie erwartet | AUTO (27.10.2026) | | |
+| A9 | Beschädigtes Paket auf dem NAS wird von `check --full` erkannt | | wie erwartet | AUTO (27.10.2026) | | |
+| A10 | Restore auf leerer Box: falscher Schlüssel abgelehnt, Schlüssel ohne Bindestriche/klein akzeptiert, neuere Backup-Version abgelehnt | | wie erwartet | AUTO (27.10.2026) | | |
+| A11 | Restore: Medienliste, Resume, Spotify-Login, Medien, Cover, Kids-Next-Status zurück; config.json der Installation bleibt; WLAN = Backup + aktuelles Netz; BT nur bei gleicher Adapter-MAC; NetBird nur mit „ja“; Bericht | | wie erwartet | AUTO (27.10.2026) | | |
+| 50 | NAS-Verbindung herstellen (Unraid, NFS und SMB) | Freigabe wird eingebunden | | OFFEN | | |
+| 51–53 | Backup manuell und per Timer auf das Unraid-NAS | Eintrag im Verlauf, Snapshot auf dem NAS | | OFFEN | | |
+| 54–56 | Integrität und Verschlüsselung auf dem echten NAS | | | OFFEN | | |
+| 57 | Restore auf neuer SD-Karte über install.sh | Box wie vorher | | OFFEN | | |
 | 59–63 | Restore WLAN, Spotify, Bluetooth, Positionen, Autostart | | | OFFEN | | |
 | 64–70 | Stromausfall, WLAN-/NAS-/BT-/Spotify-Ausfall, Update ohne Datenverlust, Schutz der Eltern-App | | | OFFEN | | |
