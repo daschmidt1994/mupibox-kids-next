@@ -28,7 +28,9 @@ Voraussetzungen:
 - **Unraid-Tipp:** Den Backup-Share **ohne Cache** bzw. mit *Primary storage: Array* anlegen. Verschiebt der Mover Dateien, während die Box sichert, meldet NFS sonst gelegentlich „stale file handle“.
 - Bei **SMB**: einen eigenen Benutzer mit Schreibrecht auf die Freigabe anlegen.
 
-Einrichten auf der Box (per SSH):
+**Am einfachsten in der Eltern-App:** *Einstellungen › System › Backup › NAS-Backup einrichten*. Dort gibt es auch „Jetzt sichern“, den Verlauf, „Schlüssel anzeigen“ und „Vom NAS wiederherstellen“.
+
+Alternativ auf der Box per SSH:
 
 ```
 sudo mupi-kn-backup setup
@@ -42,8 +44,6 @@ Der Assistent fragt nacheinander:
 5. Uhrzeit und Häufigkeit
 
 Danach **den angezeigten Schlüssel aufschreiben.**
-
-Die Einrichtung in der Eltern-App folgt in einer späteren Phase.
 
 Nützliche Befehle:
 
@@ -90,7 +90,12 @@ Genau wie in [installation.md](installation.md), Schritte 1–3:
 1. Karte in den Pi, Strom an.
 2. Warten, bis nach etwa 30–45 Minuten die (noch leere) Kinderoberfläche erscheint.
 
-### 3. Mit der Box verbinden
+### 3. Wiederherstellen in der Eltern-App (einfachster Weg)
+Im Browser die Box öffnen (`https://mupibox-jakob/app`, oder die IP-Adresse). Fragt die App beim ersten Öffnen nach einem Passwort, ein vorläufiges festlegen. Dann *Einstellungen › System › Backup › Backup vom NAS wiederherstellen*. Die App führt durch dieselben Schritte wie unten (NAS, Box, Schlüssel, Backup) und startet die Box danach neu. **Anmelden danach mit dem Passwort aus dem Backup.**
+
+Ohne App geht es per SSH weiter mit Schritt 3a.
+
+### 3a. Mit der Box verbinden
 Am PC ein Terminal öffnen (Windows: *PowerShell*):
 ```
 ssh root@mupibox-jakob

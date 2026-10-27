@@ -63,6 +63,8 @@ import { registerAdminRoutes } from './admin'
 import { bootDrive } from './boot-drive'
 import { registerNetworkRoutes, renewDhcp } from './network'
 import { registerUpdateRoutes } from './updates'
+// KN: Kids Next NAS backup and restore
+import { registerKnBackupRoutes } from './kn-backup'
 import { registerTlsRoutes, tlsOf } from './tls'
 import { type LocalLibraryDeps, registerLocalUploadRoutes } from './upload'
 import { registerLocalDownloadRoutes } from './local-download'
@@ -426,6 +428,7 @@ export function createElternApiRouter(deps: ElternRouterDeps): Router {
   registerAdminRoutes(router, { getMupiboxConfig: deps.getMupiboxConfig, updateMupiboxConfig: deps.updateMupiboxConfig, serverDir: process.cwd() })
   registerNetworkRoutes(router, { getMupiboxConfig: deps.getMupiboxConfig, updateMupiboxConfig: deps.updateMupiboxConfig })
   registerUpdateRoutes(router, { getMupiboxConfig: deps.getMupiboxConfig })
+  registerKnBackupRoutes(router)
   registerTlsRoutes(router, { getMupiboxConfig: deps.getMupiboxConfig, updateMupiboxConfig: deps.updateMupiboxConfig })
   registerHealthRoutes(router, { getMupiboxConfig: deps.getMupiboxConfig })
   registerPodcastRoutes(router, {

@@ -112,6 +112,23 @@
 	eq "Kids-Next-Status zurück" "$(cat "${BOX}/var/lib/mupibox-kn/audio.json")" "speaker=40"
 	eq "Backup läuft danach weiter in dasselbe Repository" "$(grep '^BOX_NAME=' "${BOX}/etc/mupibox-kn/backup.conf")" "BOX_NAME=mupibox-jakob"
 
+	# --- what the app uses: browse (nothing changed on the box), select --no-check + apply --check ---------------------
+	conf_before=$(cat "${BOX}/etc/mupibox-kn/backup.conf")
+	key_before=$(cat "${BOX}/etc/mupibox-kn/secrets/backup.key")
+	out=$("${RS}" browse --type local --share "${NAS}" 2>&1)
+	eq "browse: Boxen auf dem NAS" "$(jq -r '.boxes | join(",")' <<< "${out}" 2>/dev/null)" "mupibox-jakob"
+	out=$(printf '%s\n' "${KEY}" | "${RS}" browse --type local --share "${NAS}" --box mupibox-jakob --key-stdin 2>&1)
+	if jq -e '.ok and (.snapshots | length) >= 1 and .snapshots[0].compatible and .snapshots[0].media' <<< "${out}" >/dev/null 2>&1; then
+		ok "browse: Backups der Box (Version, Medien, kompatibel)"; else nok "browse: Backups der Box" "${out}"; fi
+	out=$(printf 'AAAAA-BBBBB-CCCCC-DDDDD-EEEEE-FFFFF\n' | "${RS}" browse --type local --share "${NAS}" --box mupibox-jakob --key-stdin 2>&1)
+	eq "browse: falscher Schlüssel als JSON (kind=key)" "$(jq -r '.ok, .kind' <<< "${out}" 2>/dev/null | tr '\n' ' ')" "false key "
+	if [ "$(cat "${BOX}/etc/mupibox-kn/backup.conf")" = "${conf_before}" ] && [ "$(cat "${BOX}/etc/mupibox-kn/secrets/backup.key")" = "${key_before}" ]; then
+		ok "browse verändert Einstellungen und Schlüssel der Box nicht"; else nok "browse verändert Einstellungen und Schlüssel der Box nicht"; fi
+	rm -f "${SKC}/server/config/resume.json"
+	out=$( { printf '%s\n' "${KEY}" | "${RS}" select --type local --share "${NAS}" --box mupibox-jakob --snapshot latest --key-stdin --no-check && \
+		KR_BT_CONTROLLER="B8:27:EB:00:00:01" "${RS}" apply --check --netbird no --yes; } 2>&1)
+	if grep -q "Backup geprüft" <<< "${out}" && [ -f "${SKC}/server/config/resume.json" ]; then ok "select --no-check + apply --check (Weg der App)"; else nok "select --no-check + apply --check (Weg der App)" "${out}"; fi
+
 	# another Pi: Bluetooth needs pairing again
 	rm -rf "${BOX}/var/lib/bluetooth"
 	printf '%s\n' "${KEY}" | "${RS}" select --type local --share "${NAS}" --box mupibox-jakob --snapshot latest --key-stdin >/dev/null 2>&1

@@ -1147,3 +1147,8 @@ textarea[hidden] { display: none; }
   align-items: center;
   margin-inline-start: 6px;
 }
+
+/* KN: a bar without a known end (Kids Next backup and restore) */
+.track i.indet { animation: kn-indet 1.6s ease-in-out infinite; }
+@keyframes kn-indet { 0% { opacity: 0.35; } 50% { opacity: 1; } 100% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .track i.indet { animation: none; } }

@@ -42,6 +42,11 @@ RFID-Tests (Master-Prompt 9–11, 58) entfallen, weil RFID nicht gewünscht ist.
 | A9 | Beschädigtes Paket auf dem NAS wird von `check --full` erkannt | | wie erwartet | AUTO (27.10.2026) | | |
 | A10 | Restore auf leerer Box: falscher Schlüssel abgelehnt, Schlüssel ohne Bindestriche/klein akzeptiert, neuere Backup-Version abgelehnt | | wie erwartet | AUTO (27.10.2026) | | |
 | A11 | Restore: Medienliste, Resume, Spotify-Login, Medien, Cover, Kids-Next-Status zurück; config.json der Installation bleibt; WLAN = Backup + aktuelles Netz; BT nur bei gleicher Adapter-MAC; NetBird nur mit „ja“; Bericht | | wie erwartet | AUTO (27.10.2026) | | |
+| A12 | Restore-Befehle für die App: `browse` listet Boxen/Backups ohne Änderungen an der Box, falscher Schlüssel als JSON, `select --no-check` + `apply --check` | | wie erwartet | AUTO (27.10.2026) | | |
+| A13 | Eingabeprüfung der App-Routen (`kn-backup.spec.ts`): Passwort nur auf stdin, unzulässige Werte abgelehnt | | wie erwartet | AUTO (27.10.2026) | | |
+| A14 | Bestehende Server-Tests (backend-api) | | 50 von 51 bestanden; `server.spec.ts` (RSS-Content-Type) schlägt auch im unveränderten Original fehl | AUTO (27.10.2026) | | |
+| G1 | Eltern-App › System › Backup: einrichten, Schlüssel anzeigen, jetzt sichern, Verlauf | | | OFFEN | | |
+| G2 | Eltern-App: Wiederherstellen vom NAS (Box, Schlüssel, Backup, Neustart, Anmeldung mit altem Passwort) | | | OFFEN | | |
 | 50 | NAS-Verbindung herstellen (Unraid, NFS und SMB) | Freigabe wird eingebunden | | OFFEN | | |
 | 51–53 | Backup manuell und per Timer auf das Unraid-NAS | Eintrag im Verlauf, Snapshot auf dem NAS | | OFFEN | | |
 | 54–56 | Integrität und Verschlüsselung auf dem echten NAS | | | OFFEN | | |

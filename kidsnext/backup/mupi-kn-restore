@@ -5,10 +5,13 @@
 #   mupi-kn-restore select [--state FILE]   NAS verbinden, Box und Backup wählen, Schlüssel prüfen, Backup prüfen
 #                                           (nichts auf der Box wird verändert außer den NAS-Einstellungen)
 #   mupi-kn-restore apply  [--state FILE]   das gewählte Backup einspielen (nach der Installation, vor dem Neustart)
+#   mupi-kn-restore browse ...              für die Eltern-App (JSON): Boxen auf dem NAS bzw. mit --box und Schlüssel
+#                                           deren Backups; verändert nichts auf der Box
 #
 # Für select ohne Rückfragen: --type nfs|smb|local --host H --share S [--dir D] --box NAME [--snapshot ID|latest]
 #   [--user U --password-stdin] [--key-stdin] (Schlüssel bzw. Passwort zeilenweise auf stdin, in dieser Reihenfolge)
-# Für apply: --netbird yes|no (Standard: fragen; ohne Terminal: nein), --yes
+#   --no-check: das Backup erst bei apply prüfen (die App startet apply als Hintergrundauftrag)
+# Für apply: --netbird yes|no (Standard: fragen; ohne Terminal: nein), --yes, --check (vorher restic check)
 #
 # Was nicht 1:1 zurückkommt, steht danach in /var/lib/mupibox-kn/restore-report.json (für den Assistenten der Eltern-App):
 # Bluetooth-Kopplungen nur auf demselben Pi (gleiche Bluetooth-Adresse), NetBird nur nach Bestätigung.
@@ -29,7 +32,7 @@ interactive() { [ -t 0 ] && command -v whiptail >/dev/null; }
 
 # ---------------------------------------------------------------------------------------------------------------------
 cmd_select() {
-	local snapshot="" user="" password_stdin=0 key_stdin=0 key="" arg
+	local snapshot="" user="" password_stdin=0 key_stdin=0 key="" check=1 arg
 	kb_defaults
 	NAS_TYPE="" BOX_NAME=""
 	while [ $# -gt 0 ]; do
@@ -45,6 +48,7 @@ cmd_select() {
 			--user) user="$2"; shift ;;
 			--password-stdin) password_stdin=1 ;;
 			--key-stdin) key_stdin=1 ;;
+			--no-check) check=0 ;;
 			*) die "Unbekannte Option für select: ${arg}" 2 ;;
 		esac
 		shift
@@ -146,10 +150,12 @@ cmd_select() {
 	fi
 
 	# --- check ---------------------------------------------------------------------------------------------------------
-	echo "Prüfe das Backup auf dem NAS (kann einige Minuten dauern) ..."
-	local out
-	out=$(kb_restic check 2>&1) || die "Das Backup auf dem NAS ist beschädigt: $(echo "${out}" | tail -n 2 | tr '\n' ' ')"
-	echo "✔ Backup geprüft"
+	if [ "${check}" = 1 ]; then
+		echo "Prüfe das Backup auf dem NAS (kann einige Minuten dauern) ..."
+		local out
+		out=$(kb_restic check 2>&1) || die "Das Backup auf dem NAS ist beschädigt: $(echo "${out}" | tail -n 2 | tr '\n' ' ')"
+		echo "✔ Backup geprüft"
+	fi
 	kb_umount
 
 	# The NAS settings are kept: the restored box goes on backing up into the same place, with the same key
@@ -206,13 +212,14 @@ bt_controller() {
 }
 
 cmd_apply() {
-	local netbird=ask yes=0 arg
+	local netbird=ask yes=0 check=0 arg
 	while [ $# -gt 0 ]; do
 		arg="$1"
 		case "${arg}" in
 			--state) STATE="$2"; shift ;;
 			--netbird) netbird="$2"; shift ;;
 			--yes) yes=1 ;;
+			--check) check=1 ;;
 			*) die "Unbekannte Option für apply: ${arg}" 2 ;;
 		esac
 		shift
@@ -224,17 +231,23 @@ cmd_apply() {
 	media=$(jq -r .media "${STATE}")
 	[[ "${snapshot}" =~ ^[0-9a-f]{8,64}$ ]] || die "Ungültige Auswahl in ${STATE}."
 	RESTORED=() FAILED=() NEEDS=()
+	local out
 
 	trap kb_umount EXIT
 	echo "NAS einbinden ..."
 	kb_mount || die "${KB_ERROR}"
+
+	if [ "${check}" = 1 ]; then
+		echo "Prüfe das Backup auf dem NAS (kann einige Minuten dauern) ..."
+		out=$(kb_restic check 2>&1) || die "Das Backup auf dem NAS ist beschädigt: $(echo "${out}" | tail -n 2 | tr '\n' ' ')"
+		echo "✔ Backup geprüft"
+	fi
 
 	# 1. everything but the media into a staging folder, checked file by file against the backup's checksums
 	echo "Einstellungen aus dem Backup holen ..."
 	rm -rf "${STAGING}"
 	mkdir -p "${STAGING}"
 	chmod 700 "${STAGING}"
-	local out
 	out=$(kb_restic restore "${snapshot}" --target "${STAGING}" \
 		--exclude "${KN_FS}/home/dietpi/MuPiBox/media" --exclude "${KN_FS}/home/dietpi/MuPiBox/podcasts" --verify 2>&1) \
 		|| die "Das Backup konnte nicht gelesen werden: $(echo "${out}" | tail -n 2 | tr '\n' ' ')"
@@ -399,6 +412,83 @@ cmd_apply() {
 	return 0
 }
 
+
+# ---------------------------------------------------------------------------------------------------------------------
+# For the app: what is on the NAS, without changing anything on the box. The SMB password and the key go into a folder
+# of their own in RAM, never into the box's settings.
+cmd_browse() {
+	local user="" password_stdin=0 key_stdin=0 arg tmp
+	kb_defaults
+	NAS_TYPE="" BOX_NAME=""
+	while [ $# -gt 0 ]; do
+		arg="$1"
+		case "${arg}" in
+			--type) NAS_TYPE="$2"; shift ;;
+			--host) NAS_HOST="$2"; shift ;;
+			--share) NAS_SHARE="$2"; shift ;;
+			--dir) NAS_DIR="$2"; shift ;;
+			--box) BOX_NAME="$2"; shift ;;
+			--user) user="$2"; shift ;;
+			--password-stdin) password_stdin=1 ;;
+			--key-stdin) key_stdin=1 ;;
+			*) jdie "Unbekannte Option für browse: ${arg}" ;;
+		esac
+		shift
+	done
+	for k in NAS_TYPE NAS_SHARE NAS_DIR; do kb_valid "${k}" "${!k}" || jdie "Ungültige Angabe: ${k}"; done
+	[ "${NAS_TYPE}" = local ] || { [ -n "${NAS_HOST}" ] && kb_valid NAS_HOST "${NAS_HOST}"; } || jdie "Ungültige NAS-Adresse"
+	[ -z "${BOX_NAME}" ] || kb_valid BOX_NAME "${BOX_NAME}" || jdie "Ungültiger Box-Name"
+
+	tmp=$(mktemp -d "${TMPDIR:-/tmp}/mupibox-kn-browse.XXXXXX") || jdie "Kein Platz für temporäre Dateien"
+	chmod 700 "${tmp}"
+	KB_SECRETS="${tmp}" KB_CRED_FILE="${tmp}/nas.cred" KB_KEY_FILE="${tmp}/backup.key"
+	KB_MOUNT_DIR="${KB_MOUNT_DIR}-browse"
+	trap 'kb_umount; rm -rf "${tmp}"' EXIT
+
+	if [ "${NAS_TYPE}" = smb ]; then
+		[ -n "${user}" ] && [ "${password_stdin}" = 1 ] || jdie "Für SMB fehlen Benutzer und Passwort"
+		kb_save_smb_credentials "${user}" || jdie "Ungültiger Benutzername"
+	fi
+	if [ "${KN_TEST}" != 1 ]; then
+		# shellcheck disable=SC2046
+		DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends $(kb_packages_for_type "${NAS_TYPE}") >/dev/null 2>&1 \
+			|| jdie "restic bzw. NAS-Programme konnten nicht installiert werden (Internet?)"
+		kb_quiet_rpcbind
+	fi
+	kb_mount || jdie "${KB_ERROR}"
+
+	if [ -z "${BOX_NAME}" ]; then
+		local boxes=() d
+		for d in "${KB_NAS_ROOT}/${NAS_DIR}"/*/; do
+			[ -f "${d}config" ] && boxes+=("$(basename "${d}")")
+		done
+		printf '%s\n' "${boxes[@]}" | jq -R . | jq -s '{ok: true, boxes: map(select(. != ""))}'
+		return 0
+	fi
+
+	kb_repo_exists || jdie "Kein Backup für ${BOX_NAME} auf dem NAS"
+	local key
+	[ "${key_stdin}" = 1 ] && IFS= read -r key
+	[ -n "${key}" ] || jdie "Wiederherstellungsschlüssel fehlt"
+	kb_save_key "$(kb_normalize_key "${key}")"
+	kb_restic cat config >/dev/null 2>&1 || jdie "Der Wiederherstellungsschlüssel passt nicht" key
+	local snaps kver
+	snaps=$(kb_restic snapshots --json 2>/dev/null) || jdie "Die Backups konnten nicht gelesen werden"
+	kver=$(kb_kn_version)
+	echo "${snaps}" | jq --arg kver "${kver}" '
+		def vnum: split(".") | map(tonumber? // 0);
+		{ok: true, snapshots: (sort_by(.time) | reverse | map({id: .short_id, date: .time,
+			version: ((.tags // []) | map(select(startswith("kn-"))) | first // "kn-0.0.0" | ltrimstr("kn-")),
+			media: ((.tags // []) | index("media") != null), size: (.summary.total_bytes_processed // null)})
+			| map(. + {compatible: ((.version | vnum) <= ($kver | vnum))}))}'
+}
+
+# a failure as JSON for the app (kind: "key" when the key was wrong)
+jdie() {
+	jq -n --arg e "$1" --arg k "${2:-}" '{ok: false, error: $e, kind: (if $k == "" then null else $k end)}'
+	kb_umount
+	exit 1
+}
 # ---------------------------------------------------------------------------------------------------------------------
 [ "$(id -u)" = 0 ] || [ "${KN_TEST}" = 1 ] || { echo "Bitte als root starten (sudo)." >&2; exit 1; }
 CMD="${1:-help}"
@@ -406,6 +496,7 @@ shift
 case "${CMD}" in
 	select) cmd_select "$@" ;;
 	apply) cmd_apply "$@" ;;
-	help|--help|-h) sed -n '3,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
-	*) echo "Unbekannter Befehl: ${CMD} (select, apply)" >&2; exit 2 ;;
+	browse) cmd_browse "$@" ;;
+	help|--help|-h) sed -n '3,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+	*) echo "Unbekannter Befehl: ${CMD} (select, apply, browse)" >&2; exit 2 ;;
 esac

@@ -9698,12 +9698,66 @@ function mountExperts(root, page) {
 
 /* Backup */
 
+/* KN: Kids Next - NAS backup and restore (kidsnext/backup, routes in eltern/kn-backup.ts) */
+
+const kb = { status: null, missing: false }
+const KB_DAYS = { daily: 'täglich', Sun: 'wöchentlich (Sonntag)' }
+
+async function loadBackup() {
+  const r = await api(`${API}/kn/backup`)
+  kb.missing = r.status === 503
+  kb.status = r.ok ? r.body : null
+}
+
+const kbWhen = (t) => (t ? new Date(t).toLocaleString(LOCALE, { dateStyle: 'medium', timeStyle: 'short' }) : '–')
+
+function kbNasCard() {
+  const s = kb.status
+  if (kb.missing || !s) {
+    return `<section class="card"><h2>NAS-Backup</h2><p class="help">Das NAS-Backup von MuPiBox Kids Next ist auf dieser Box nicht installiert.</p></section>`
+  }
+  if (!s.configured) {
+    return `<section class="card"><h2>NAS-Backup</h2>
+      <p class="help">Sichert Einstellungen, Medienliste, Hörspielpositionen, Spotify, WLAN und Bluetooth verschlüsselt auf dein NAS (NFS oder SMB) – auf Wunsch auch alle Hörspiele. Damit lässt sich die Box nach einem Defekt der SD-Karte wiederherstellen.</p>
+      <div class="btns"><button class="btn primary" id="kb-setup">NAS-Backup einrichten</button></div></section>`
+  }
+  const last = s.lastOk
+  const failed = s.lastRun && !s.lastRun.ok
+  const chip = s.running ? '<span class="chip">läuft</span>' : failed ? '<span class="chip danger">Fehler</span>' : last ? '<span class="chip ok">OK</span>' : '<span class="chip warn">noch keins</span>'
+  const target = `${s.nas.type.toUpperCase()} ${s.nas.host}${s.nas.share.startsWith('/') ? ':' : '/'}${s.nas.share} › ${s.nas.dir}/${s.box}`
+  const history = (s.history ?? []).slice(0, 8)
+  return `<section class="card" id="kb-card"><div class="card-head"><h2>NAS-Backup</h2>${chip}</div>
+    <dl class="kv">
+      <div><dt>Ziel</dt><dd>${esc(target)}</dd></div>
+      <div><dt>Automatisch</dt><dd>${s.enabled ? `${esc(KB_DAYS[s.schedule.days] ?? s.schedule.days)} um ${esc(s.schedule.time)}` : 'aus'}</dd></div>
+      <div><dt>Hörspiele & Musik</dt><dd>${s.includeMedia ? 'werden mitgesichert' : 'nicht mitgesichert'}</dd></div>
+      <div><dt>Letztes erfolgreiches Backup</dt><dd>${last ? `${esc(kbWhen(last.date))} · ${formatBytes(last.size ?? 0)}` : 'noch keines'}</dd></div>
+      ${last?.repoSize ? `<div><dt>Platz auf dem NAS</dt><dd>${formatBytes(last.repoSize)}</dd></div>` : ''}
+    </dl>
+    ${failed ? `<div class="note warn">${icon('info', 18)}<span>Letzter Versuch am ${esc(kbWhen(s.lastRun.date))} fehlgeschlagen: ${esc(s.lastRun.error ?? '')}</span></div>` : ''}
+    ${s.keyOnBox ? '' : `<div class="note warn">${icon('info', 18)}<span>Auf der Box ist kein Wiederherstellungsschlüssel gespeichert – bitte unter „Ändern“ neu einrichten.</span></div>`}
+    ${s.running ? `<div class="bar"><div class="slider-head"><b>Backup läuft …</b></div><div class="track"><i class="indet" style="--w:100%"></i></div></div>${s.output ? `<details><summary class="help">Ausgabe</summary><pre class="logview" style="height:180px">${esc(s.output)}</pre></details>` : ''}` : ''}
+    <div class="btns"><button class="btn primary" id="kb-run" ${s.running ? 'disabled' : ''}>Jetzt sichern</button><button class="btn" id="kb-setup">Ändern</button><button class="btn ghost" id="kb-key">Schlüssel anzeigen</button></div>
+    ${history.length ? `<details><summary class="help">Verlauf</summary><div class="rows">${history
+      .map(
+        (h) => `<div class="entry"><span class="lbl"><b>${esc(kbWhen(h.date))}</b><small>${
+          h.ok ? `${formatBytes(h.size ?? 0)} gesichert, ${formatBytes(h.dataAdded ?? 0)} neu${h.media ? ' · mit Medien' : ''}` : esc(h.error ?? 'fehlgeschlagen')
+        }</small></span><span class="chip ${h.ok ? 'ok' : 'danger'}">${h.ok ? 'OK' : 'Fehler'}</span></div>`,
+      )
+      .join('')}</div></details>` : ''}
+  </section>`
+}
+
 function backupTop() {
   return [
-    `<section class="card"><h2>Sichern</h2>
+    kbNasCard(),
+    `<section class="card"><h2>Vom NAS wiederherstellen</h2>
+      <p class="help">Holt Einstellungen, Medienliste, Hörspielpositionen, Spotify, WLAN und – soweit möglich – Bluetooth aus einem NAS-Backup zurück. Nach einer neuen SD-Karte: erst die Box automatisch installieren lassen, dann hier wiederherstellen. Die Box startet danach neu.</p>
+      <div class="btns"><button class="btn" id="kb-restore" ${kb.missing ? 'disabled' : ''}>Backup vom NAS wiederherstellen</button></div></section>`,
+    `<section class="card"><h2>Backup als Datei</h2>
       <div class="rows"><div class="entry"><span class="lbl"><b>Konfigurations-Backup</b><small>Einstellungen (mupiboxconfig.json), Bibliothek (data.json) und eigene Cover. Enthält auch Passwörter und Zugänge – gut aufbewahren.</small></span><a class="btn primary sm" href="${API}/backup?kind=config" download>Herunterladen</a></div>
         <div class="entry"><span class="lbl"><b>Voll-Backup</b><small>Dazu alle Medien der SD-Karte – kann mehrere GB groß sein und dauern.</small></span><a class="btn sm" href="${API}/backup?kind=full" download>Herunterladen</a></div></div></section>`,
-    `<section class="card"><h2>Einspielen</h2><p class="help">Eine Backup-Datei dieser App oder des Admin-Interface. Sie überschreibt Einstellungen und Bibliothek; danach startet die Box neu.</p>
+    `<section class="card"><h2>Datei einspielen</h2><p class="help">Eine Backup-Datei dieser App oder des Admin-Interface. Sie überschreibt Einstellungen und Bibliothek; danach startet die Box neu.</p>
       <input type="file" id="bk-file" accept=".zip,application/zip" hidden>
       <div class="btns"><button class="btn" id="bk-pick">Backup-Datei wählen</button><button class="btn danger" id="bk-go" disabled>Backup einspielen</button></div>
       <p class="help" id="bk-name" style="margin:0"></p>
@@ -9711,7 +9765,282 @@ function backupTop() {
   ]
 }
 
-function mountBackup(root) {
+// The NAS fields, shared by the setup and the restore (values: what is set up already)
+function kbNasFields(v = {}) {
+  const type = v.type || 'nfs'
+  return `<div class="field"><label>Verbindung</label><div class="seg" id="kb-type">
+      <button type="button" data-t="nfs" aria-pressed="${type === 'nfs'}">NFS (Linux-NAS, Unraid)</button><button type="button" data-t="smb" aria-pressed="${type === 'smb'}">SMB (Windows-Freigabe)</button></div></div>
+    <div class="field"><label for="kb-host">Adresse des NAS</label><input class="input" id="kb-host" value="${esc(v.host ?? '')}" placeholder="z. B. 192.168.178.20" autocomplete="off" autocapitalize="off"></div>
+    <div class="field"><label for="kb-share">Freigabe</label><input class="input" id="kb-share" value="${esc(v.share ?? '')}" autocomplete="off" autocapitalize="off"><small id="kb-share-help"></small></div>
+    <div class="field" data-smb><label for="kb-user">Benutzer auf dem NAS</label><input class="input" id="kb-user" autocomplete="off" autocapitalize="off"></div>
+    <div class="field" data-smb><label for="kb-pass">Passwort</label><input class="input" id="kb-pass" type="password" autocomplete="new-password" placeholder="${v.host ? 'leer lassen = unverändert' : ''}"></div>
+    <div class="field"><label for="kb-dir">Ordner auf der Freigabe</label><input class="input" id="kb-dir" value="${esc(v.dir || 'mupibox-backups')}" autocomplete="off" autocapitalize="off"></div>`
+}
+
+function kbWireNas(sheet) {
+  const show = () => {
+    const smb = $('#kb-type [aria-pressed="true"]', sheet).dataset.t === 'smb'
+    for (const f of sheet.querySelectorAll('[data-smb]')) f.hidden = !smb
+    $('#kb-share-help', sheet).textContent = smb ? 'Name der Freigabe, z. B. backups' : 'Pfad der NFS-Freigabe, bei Unraid z. B. /mnt/user/backups'
+  }
+  for (const b of sheet.querySelectorAll('#kb-type button')) {
+    b.onclick = () => {
+      for (const x of sheet.querySelectorAll('#kb-type button')) x.setAttribute('aria-pressed', String(x === b))
+      show()
+    }
+  }
+  show()
+}
+
+function kbNasValues(sheet) {
+  return {
+    type: $('#kb-type [aria-pressed="true"]', sheet).dataset.t,
+    host: $('#kb-host', sheet).value.trim(),
+    share: $('#kb-share', sheet).value.trim(),
+    user: $('#kb-user', sheet).value.trim(),
+    password: $('#kb-pass', sheet).value,
+    dir: $('#kb-dir', sheet).value.trim(),
+  }
+}
+
+const KB_FIELD = {
+  type: 'Verbindung',
+  host: 'Adresse des NAS',
+  share: 'Freigabe',
+  dir: 'Ordner',
+  user: 'Benutzer',
+  password: 'Passwort',
+  box: 'Name der Box',
+  time: 'Uhrzeit',
+  days: 'Häufigkeit',
+  keep: 'Aufbewahrung',
+  key: 'Wiederherstellungsschlüssel',
+  snapshot: 'Backup',
+}
+const kbError = (r) => (r.body?.field ? `Bitte prüfen: ${KB_FIELD[r.body.field] ?? r.body.field}` : (r.body?.error ?? 'Das hat nicht geklappt'))
+
+function openBackupSetup(page) {
+  const s = kb.status ?? {}
+  const nas = s.configured ? s.nas : {}
+  const sched = s.schedule ?? { time: '03:30', days: 'daily' }
+  const keep = s.keep ?? { daily: 7, weekly: 4, monthly: 6 }
+  openSheet(
+    `<h2>NAS-Backup ${s.configured ? 'ändern' : 'einrichten'}</h2>
+     ${kbNasFields(nas)}
+     <div class="field"><label for="kb-box">Name dieser Box</label><input class="input" id="kb-box" value="${esc(s.box || state.boxName || '')}" autocomplete="off"><small>Eigener Unterordner auf dem NAS – bei einer neuen SD-Karte denselben Namen nehmen.</small></div>
+     <div class="row"><span class="lbl"><b>Hörspiele und Musik mitsichern</b><small>Lokale Medien der SD-Karte. Kann groß werden, wird aber nur einmal übertragen.</small></span><label class="switch"><input type="checkbox" id="kb-media" ${s.includeMedia ? 'checked' : ''} aria-label="Medien mitsichern"><span></span></label></div>
+     <div class="row"><span class="lbl"><b>Automatisch sichern</b></span><label class="switch"><input type="checkbox" id="kb-enabled" ${s.configured ? (s.enabled ? 'checked' : '') : 'checked'} aria-label="Automatisch sichern"><span></span></label></div>
+     <div class="field"><label for="kb-days">Wann</label><div class="btns" style="margin:0">
+       <select class="input" id="kb-days"><option value="daily" ${sched.days === 'daily' ? 'selected' : ''}>täglich</option><option value="Sun" ${sched.days === 'Sun' ? 'selected' : ''}>wöchentlich (Sonntag)</option></select>
+       <input class="input" id="kb-time" type="time" value="${esc(sched.time)}" style="max-width:140px"></div><small>Läuft gerade etwas, wartet das Backup bis zu 2 Stunden.</small></div>
+     <details><summary class="help">Aufbewahrung und vorhandenes Backup</summary>
+       <div class="field"><label>Behalten: täglich / wöchentlich / monatlich</label><div class="btns" style="margin:0">
+         <input class="input" id="kb-kd" type="number" min="0" max="999" value="${keep.daily}" style="max-width:90px"><input class="input" id="kb-kw" type="number" min="0" max="999" value="${keep.weekly}" style="max-width:90px"><input class="input" id="kb-km" type="number" min="0" max="999" value="${keep.monthly}" style="max-width:90px"></div></div>
+       <div class="field"><label for="kb-oldkey">Wiederherstellungsschlüssel eines vorhandenen Backups</label><input class="input" id="kb-oldkey" autocomplete="off" autocapitalize="characters" placeholder="nur nötig, wenn es für diese Box schon ein Backup gibt"></div>
+     </details>
+     <div class="btns"><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="kb-save">${s.configured ? 'Speichern' : 'Einrichten'}</button></div>
+     <p class="help" id="kb-msg" style="margin:0"></p>`,
+    (sheet, close) => {
+      kbWireNas(sheet)
+      sheet.querySelector('[data-close]').onclick = close
+      $('#kb-save', sheet).onclick = async () => {
+        const btn = $('#kb-save', sheet)
+        btn.disabled = true
+        $('#kb-msg', sheet).textContent = 'Verbinde mit dem NAS … (beim ersten Mal werden Programme installiert, das kann einige Minuten dauern)'
+        const r = await api(`${API}/kn/backup/setup`, {
+          method: 'POST',
+          body: {
+            ...kbNasValues(sheet),
+            box: $('#kb-box', sheet).value.trim(),
+            media: $('#kb-media', sheet).checked,
+            enabled: $('#kb-enabled', sheet).checked,
+            days: $('#kb-days', sheet).value,
+            time: $('#kb-time', sheet).value,
+            keepDaily: $('#kb-kd', sheet).value,
+            keepWeekly: $('#kb-kw', sheet).value,
+            keepMonthly: $('#kb-km', sheet).value,
+            key: $('#kb-oldkey', sheet).value.trim(),
+          },
+        })
+        btn.disabled = false
+        if (!r.ok) {
+          $('#kb-msg', sheet).textContent = kbError(r)
+          return
+        }
+        close()
+        if (r.body?.newKey) showBackupKey(r.body.newKey, true)
+        else toast('NAS-Backup gespeichert')
+        renderPage(page)
+      }
+    },
+  )
+}
+
+// The recovery key: when it is new, the sheet closes only after "written down"
+function showBackupKey(key, isNew) {
+  openSheet(
+    `<h2>Wiederherstellungsschlüssel</h2>
+     ${isNew ? `<div class="note warn">${icon('info', 18)}<span>Bitte jetzt aufschreiben oder im Passwortmanager speichern. Ohne diesen Schlüssel lässt sich das Backup nach einem Defekt der SD-Karte nicht wiederherstellen – er liegt sonst nur auf dieser Box.</span></div>` : ''}
+     <p style="font:700 22px/1.5 ui-monospace,monospace;letter-spacing:.04em;text-align:center;word-break:break-all;user-select:all;margin:18px 0">${esc(key)}</p>
+     <div class="btns"><button class="btn" id="kb-copy">Kopieren</button>${isNew ? '' : '<button class="btn primary" data-close>Schließen</button>'}</div>
+     ${isNew ? `<div class="row"><span class="lbl"><b>Ich habe den Schlüssel aufgeschrieben</b></span><label class="switch"><input type="checkbox" id="kb-noted" aria-label="Aufgeschrieben"><span></span></label></div>
+       <div class="btns"><button class="btn primary" data-close disabled>Fertig</button></div>` : ''}`,
+    (sheet, close) => {
+      const done = sheet.querySelector('[data-close]')
+      done.onclick = close
+      $('#kb-copy', sheet).onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(key)
+          toast('Kopiert')
+        } catch {
+          toast('Kopieren ging nicht – bitte abschreiben', 'info')
+        }
+      }
+      const noted = $('#kb-noted', sheet)
+      if (noted) {
+        noted.onchange = () => {
+          done.disabled = !noted.checked
+        }
+      }
+    },
+  )
+}
+
+// Restore: NAS › box › key › backup › restore (the box restarts)
+function openRestoreWizard() {
+  const s = kb.status ?? {}
+  const w = { nas: null, box: '', key: '' }
+  const step1 = () =>
+    openSheet(
+      `<h2>Vom NAS wiederherstellen</h2><p class="help">Wo liegen die Backups?</p>
+       ${kbNasFields(s.configured ? s.nas : {})}
+       <div class="btns"><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="kr-next">Backups suchen</button></div>
+       <p class="help" id="kr-msg" style="margin:0"></p>`,
+      (sheet, close) => {
+        kbWireNas(sheet)
+        sheet.querySelector('[data-close]').onclick = close
+        $('#kr-next', sheet).onclick = async () => {
+          w.nas = kbNasValues(sheet)
+          $('#kr-next', sheet).disabled = true
+          $('#kr-msg', sheet).textContent = 'Suche auf dem NAS …'
+          const r = await api(`${API}/kn/restore/browse`, { method: 'POST', body: w.nas })
+          $('#kr-next', sheet).disabled = false
+          const msg = !r.ok ? kbError(r) : r.body.boxes?.length ? '' : `Unter „${w.nas.dir}“ wurde kein MuPiBox-Backup gefunden.`
+          $('#kr-msg', sheet).textContent = msg
+          if (!msg) step2(r.body.boxes)
+        }
+      },
+    )
+  const step2 = (boxes) =>
+    openSheet(
+      `<h2>Welche Box?</h2>
+       <div class="field"><label for="kr-box">Backup der Box</label><select class="input" id="kr-box">${boxes.map((b) => `<option ${b === (s.box || state.boxName) ? 'selected' : ''}>${esc(b)}</option>`).join('')}</select></div>
+       <div class="field"><label for="kr-key">Wiederherstellungsschlüssel</label><input class="input" id="kr-key" autocomplete="off" autocapitalize="characters" placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX"><small>Groß-/Kleinschreibung und Bindestriche sind egal.</small></div>
+       <div class="btns"><button class="btn" id="kr-back">Zurück</button><button class="btn primary" id="kr-next">Weiter</button></div>
+       <p class="help" id="kr-msg" style="margin:0"></p>`,
+      (sheet) => {
+        $('#kr-back', sheet).onclick = step1
+        $('#kr-next', sheet).onclick = async () => {
+          w.box = $('#kr-box', sheet).value
+          w.key = $('#kr-key', sheet).value.trim()
+          $('#kr-next', sheet).disabled = true
+          $('#kr-msg', sheet).textContent = 'Prüfe den Schlüssel …'
+          const r = await api(`${API}/kn/restore/browse`, { method: 'POST', body: { ...w.nas, box: w.box, key: w.key } })
+          $('#kr-next', sheet).disabled = false
+          if (!r.ok) {
+            $('#kr-msg', sheet).textContent = r.body?.kind === 'key' ? 'Der Schlüssel passt nicht zu diesem Backup.' : kbError(r)
+            return
+          }
+          step3(r.body.snapshots ?? [])
+        }
+      },
+    )
+  const step3 = (snaps) => {
+    const first = snaps.find((x) => x.compatible)
+    openSheet(
+      `<h2>Welches Backup?</h2>
+       <div class="rows">${snaps
+         .slice(0, 30)
+         .map(
+           (x) => `<label class="entry"><input type="radio" name="kr-snap" value="${esc(x.id)}" ${x === first ? 'checked' : ''} ${x.compatible ? '' : 'disabled'}>
+             <span class="lbl"><b>${esc(kbWhen(x.date))}</b><small>Version ${esc(x.version)}${x.media ? ' · mit Hörspielen' : ''}${x.size ? ` · ${formatBytes(x.size)}` : ''}${x.compatible ? '' : ' · neuer als diese Box, zuerst aktualisieren'}</small></span></label>`,
+         )
+         .join('')}</div>
+       <div class="row"><span class="lbl"><b>NetBird-Zugang übernehmen</b><small>Nur wenn die alte SD-Karte nicht mehr benutzt wird – sonst später mit neuem Setup-Key verbinden.</small></span><label class="switch"><input type="checkbox" id="kr-netbird" aria-label="NetBird übernehmen"><span></span></label></div>
+       <div class="note warn">${icon('info', 18)}<span>Einstellungen und Bibliothek dieser Box werden durch das Backup ersetzt. Danach startet die Box neu; anmelden dann mit dem Passwort aus dem Backup.</span></div>
+       <div class="btns"><button class="btn" id="kr-back">Zurück</button><button class="btn danger" id="kr-go" ${first ? '' : 'disabled'}>Wiederherstellen</button></div>
+       <p class="help" id="kr-msg" style="margin:0"></p>`,
+      (sheet) => {
+        $('#kr-back', sheet).onclick = step1
+        $('#kr-go', sheet).onclick = async () => {
+          const snapshot = sheet.querySelector('input[name="kr-snap"]:checked')?.value
+          if (!snapshot) return
+          $('#kr-go', sheet).disabled = true
+          $('#kr-msg', sheet).textContent = 'Starte die Wiederherstellung …'
+          const r = await api(`${API}/kn/restore/start`, {
+            method: 'POST',
+            body: { ...w.nas, box: w.box, key: w.key, snapshot, netbird: $('#kr-netbird', sheet).checked },
+          })
+          if (!r.ok) {
+            $('#kr-go', sheet).disabled = false
+            $('#kr-msg', sheet).textContent = r.body?.error === 'running' ? 'Es läuft gerade ein Backup oder eine Wiederherstellung.' : kbError(r)
+            return
+          }
+          restoreProgress()
+        }
+      },
+    )
+  }
+  step1()
+}
+
+// While the restore runs the server stops and the box restarts: the sheet keeps asking until the box answers again
+function restoreProgress() {
+  let gone = false
+  openSheet(
+    `<h2>Wird wiederhergestellt …</h2>
+     <div class="bar"><div class="track"><i class="indet" style="--w:100%"></i></div><small id="kr-state">Backup wird geprüft und eingespielt.</small></div>
+     <pre class="logview" id="kr-out" style="height:200px"></pre>
+     <p class="help">Die Box startet danach von selbst neu – diese Seite lädt sich dann neu. Bitte die Box nicht ausschalten.</p>`,
+    () => {
+      const tick = async () => {
+        const r = await api(`${API}/kn/restore/state`).catch(() => null)
+        if (r?.ok) {
+          if (gone) return location.reload()
+          if (r.body.output) $('#kr-out').textContent = r.body.output
+          if (!r.body.running && r.body.report && r.body.report.ok === false) {
+            $('#kr-state').textContent = `Nicht vollständig: ${(r.body.report.failed ?? []).join(', ')}`
+          }
+          return
+        }
+        // (the server is stopped by the restore, then the box restarts)
+        gone = true
+        $('#kr-state').textContent = 'Die Box spielt die Daten ein und startet neu …'
+        const back = await fetch('/app/', { cache: 'no-store' }).catch(() => null)
+        if (back?.ok) location.reload()
+      }
+      every(4000, tick)
+    },
+  )
+}
+
+function mountBackup(root, page) {
+  $('#kb-setup', root)?.addEventListener('click', () => openBackupSetup(page))
+  $('#kb-restore', root)?.addEventListener('click', openRestoreWizard)
+  $('#kb-run', root)?.addEventListener('click', async () => {
+    const r = await api(`${API}/kn/backup/run`, { method: 'POST' })
+    if (!r.ok) return toast(r.body?.error === 'running' ? 'Es läuft schon ein Backup' : kbError(r), 'info')
+    toast('Backup gestartet')
+    renderPage(page)
+  })
+  $('#kb-key', root)?.addEventListener('click', async () => {
+    const r = await api(`${API}/kn/backup/key`, { method: 'POST' })
+    if (!r.ok) return toast(kbError(r), 'info')
+    showBackupKey(r.body.key, false)
+  })
+  // (while a backup runs: the card follows it)
+  if (kb.status?.running) every(5000, () => renderPage(page))
+
   let file = null
   $('#bk-pick', root).onclick = () => $('#bk-file', root).click()
   $('#bk-file', root).onchange = (e) => {
@@ -11508,7 +11837,7 @@ const CONTROLLERS = {
     },
   },
   experten: { load: loadExperts, top: expertsTop, sections: () => [], ownNav: true, mount: mountExperts },
-  backup: { top: backupTop, sections: () => [], mount: mountBackup },
+  backup: { load: loadBackup, top: backupTop, sections: () => [], mount: mountBackup },
   updates: { load: loadUpdates, top: updatesTop, sections: () => [], ownNav: true, mount: mountUpdates },
   nas: {
     load: loadNas,
