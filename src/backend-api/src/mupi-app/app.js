@@ -10148,7 +10148,7 @@ function updatesTop() {
       const older = c === 'stable' && mine && cmpVersion(rel.version, mine) < 0
       const label = current ? 'Neu installieren' : older ? 'Installieren (älter)' : 'Installieren'
       const kind = c === 'dev' ? 'danger' : !current && !older ? 'primary' : ''
-      const ver = c === 'dev' && rel.date ? `${rel.version} · Stand ${rel.date}` : rel.version
+      const ver = c === 'dev' && rel.date ? `${rel.version} · Stand ${rel.date}${rel.commit ? ` · ${rel.commit.slice(0, 7)}` : ''}` : rel.version
       return `<div class="row"><span class="lbl"><b>${esc(CHANNEL_LABEL[c])} · ${esc(ver)}</b><small>${esc(rel.info)}</small></span>
         <button class="btn ${kind}" data-upd="${c}" ${busy ? 'disabled' : ''}>${label}</button></div>`
     })

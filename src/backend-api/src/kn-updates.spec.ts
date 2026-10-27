@@ -15,7 +15,7 @@ describe('kn updates', () => {
   it('a box on the development branch follows its commits', () => {
     const box = inst({ version: '0.1.0', ref: 'kids-next', commit: 'a'.repeat(40) })
     assert.equal(channelOf(box), 'dev')
-    assert.deepEqual(updateFor(box, { stable, dev }), { channel: 'dev', version: '0.2.1 · Stand 2026-10-28' })
+    assert.deepEqual(updateFor(box, { stable, dev }), { channel: 'dev', version: '0.2.1 · Stand 2026-10-28 (bbbbbbb)' })
     assert.equal(updateFor({ ...box, commit: 'b'.repeat(40) }, { stable, dev }), null)
   })
 

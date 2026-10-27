@@ -4010,7 +4010,7 @@
    "area": "einstellungen",
    "parent": "g-system",
    "title": "Updates",
-   "description": "MuPiBox-Versionen, Betriebssystem",
+   "description": "Kids-Next-Versionen, Betriebssystem",
    "icon": "sync",
    "sections": [
     {
@@ -4935,7 +4935,7 @@
        "type": "nav",
        "label": "Updates",
        "target": "updates",
-       "subtitle": "MuPiBox-Versionen, Betriebssystem"
+       "subtitle": "Kids-Next-Versionen, Betriebssystem"
       },
       {
        "type": "nav",

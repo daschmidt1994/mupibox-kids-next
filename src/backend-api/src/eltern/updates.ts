@@ -244,7 +244,7 @@ export function updateFor(
   if (!next) return null
   if (channel === 'dev') {
     if (!next.commit || next.commit === installed.commit) return null
-    return { channel, version: `${next.version} · Stand ${next.date ?? ''}`.trim() }
+    return { channel, version: `${next.version} · Stand ${next.date ?? ''} (${next.commit.slice(0, 7)})` }
   }
   if (!installed.version) return null
   return compareVersions(next.version, installed.version) > 0 ? { channel, version: next.version } : null
