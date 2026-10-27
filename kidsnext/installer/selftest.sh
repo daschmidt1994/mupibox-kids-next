@@ -58,6 +58,13 @@ check no_web_root "Webserver ohne Root-Rechte" test ! -e /etc/sudoers.d/www-data
 check secrets_dir "Ordner für Zugangsdaten geschützt" sh -c '[ "$(stat -c %a /etc/mupibox-kn/secrets)" = 700 ]'
 soft_check soundcard "Soundkarte erkannt" sh -c 'aplay -l 2>/dev/null | grep -q "^card"'
 soft_check netbird "NetBird installiert" command -v netbird
+if [ -f /var/lib/mupibox-kn/hat.json ]; then
+	case "$(jq -r .result /var/lib/mupibox-kn/hat.json 2>/dev/null)" in
+		present) soft_check mupihat "MuPiHAT erkannt und eingeschaltet" sh -c '[ "$(jq -r ".mupihat.hat_active // false" /etc/mupibox/mupiboxconfig.json)" = true ]' ;;
+		absent) result ok mupihat "Kein MuPiHAT verbaut" ;;
+		*) result warn mupihat "MuPiHAT-Erkennung läuft beim nächsten Start" ;;
+	esac
+fi
 
 if [ "${MODE}" = "running" ]; then
 	check pm2 "Dienst pm2-dietpi läuft" systemctl is-active -q pm2-dietpi

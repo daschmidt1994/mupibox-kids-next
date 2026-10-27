@@ -194,7 +194,7 @@ cat /tmp/autosetup.log >> "${KN_LOG}" 2>/dev/null
 kn_ok "MuPiBox-Grundinstallation fertig"
 
 # Kids Next modules, in this order; each is idempotent and may be run again on its own (kidsnext/installer/<name>.sh)
-KN_MODULES=(base backup netbird)
+KN_MODULES=(base hat backup netbird)
 for module in "${KN_MODULES[@]}"; do
 	file="${KN_INSTALLER}/${module}.sh"
 	[ -f "${file}" ] || kn_die "Installer-Modul ${module} fehlt."

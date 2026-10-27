@@ -1,0 +1,10 @@
+[Unit]
+Description=MuPiBox Kids Next: MuPiHAT erkennen (einmalig, nachdem I2C eingeschaltet wurde)
+After=local-fs.target systemd-modules-load.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mupi-kn-hat auto --boot
+
+[Install]
+WantedBy=multi-user.target

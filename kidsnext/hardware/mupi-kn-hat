@@ -1,0 +1,157 @@
+#!/bin/bash
+#
+# MuPiBox Kids Next – MuPiHAT automatisch erkennen und einschalten (als root).
+#
+#   mupi-kn-hat detect [--json]     ist ein MuPiHAT da? (Ladechip BQ25792 am I2C-Bus 1, Adresse 0x6B)
+#   mupi-kn-hat auto [--boot]       beim ersten Mal: erkannt -> einschalten wie der Schalter in der App (Treiber,
+#                                   Soundkarte MAX98357A, Dienste); --boot startet danach neu
+#   mupi-kn-hat status [--json]     das Ergebnis der letzten Erkennung
+#
+# Decided once per box (/var/lib/mupibox-kn/hat.json): what the parents switch in the app afterwards stays as they
+# set it - the detection never switches the HAT on again. Without the I2C bus (it needs dtparam=i2c_arm=on, read at
+# the start) the line is added and the detection runs at the next start (mupi-kn-hat-detect.service).
+
+set -o pipefail
+export LC_ALL=C.UTF-8
+
+STATE="${KN_HAT_STATE:-/var/lib/mupibox-kn/hat.json}"
+BUS="${KN_HAT_BUS:-1}"
+ADDR=0x6b
+CONFIG="${MUPIBOX_CONFIG:-/etc/mupibox/mupiboxconfig.json}"
+BIN="${KN_MUPIBOX_BIN:-/usr/local/bin/mupibox}"
+I2CGET="${KN_I2CGET:-i2cget}"
+SYSTEMCTL="${KN_SYSTEMCTL:-systemctl}"
+JSON=0
+BOOT=0
+
+for a in "$@"; do
+	case "${a}" in
+		--json) JSON=1 ;;
+		--boot) BOOT=1 ;;
+	esac
+done
+
+boot_config() {
+	if [ -n "${BOOT_CONFIG}" ]; then echo "${BOOT_CONFIG}"
+	elif [ -f /boot/firmware/config.txt ]; then echo /boot/firmware/config.txt
+	else echo /boot/config.txt; fi
+}
+
+# the I2C bus, at runtime when possible (dtparam is there on Raspberry Pi kernels); returns 1 when it is not there
+i2c_bus() {
+	[ -n "${KN_HAT_NOBUS}" ] && return 1
+	[ -n "${KN_HAT_TEST}" ] && return 0
+	[ -e "/dev/i2c-${BUS}" ] && return 0
+	modprobe i2c-dev 2>/dev/null
+	[ -e "/dev/i2c-${BUS}" ] && return 0
+	command -v dtparam >/dev/null && dtparam i2c_arm=on 2>/dev/null && sleep 1
+	modprobe i2c-dev 2>/dev/null
+	[ -e "/dev/i2c-${BUS}" ]
+}
+
+# prints present | absent | unknown (no I2C bus yet); the part number of the BQ25792 is 001 in bits 5-3 of REG48
+detect() {
+	if ! i2c_bus; then
+		echo unknown
+		return
+	fi
+	local v
+	v=$("${I2CGET}" -y "${BUS}" "${ADDR}" 0x48 b 2>/dev/null)
+	if [[ "${v}" =~ ^0x[0-9a-fA-F]{2}$ ]] && [ $(((v >> 3) & 7)) = 1 ]; then
+		echo present
+	else
+		echo absent
+	fi
+}
+
+write_state() {
+	# write_state <result> <action>
+	mkdir -p "$(dirname "${STATE}")"
+	jq -n --arg r "$1" --arg a "$2" --arg d "$(date -Iseconds)" '{result: $r, action: $a, date: $d}' > "${STATE}.tmp" && mv -f "${STATE}.tmp" "${STATE}"
+}
+
+hat_active() { [ "$(jq -r '.mupihat.hat_active // false' "${CONFIG}" 2>/dev/null)" = true ]; }
+
+# mupihat.hat_active in the config, under the lock the server and the scripts take (as enable_mupihat.sh writes)
+set_active() {
+	local lock=/tmp/.mupiboxconfig.lock tmp="${CONFIG}.kn-hat"
+	[ -e "${lock}" ] || { : > "${lock}"; chmod 666 "${lock}"; }
+	(
+		flock -w 15 9 || exit 1
+		jq '.mupihat.hat_active = true' "${CONFIG}" > "${tmp}" && [ -s "${tmp}" ] &&
+			chown --reference="${CONFIG}" "${tmp}" && chmod --reference="${CONFIG}" "${tmp}" && mv -f "${tmp}" "${CONFIG}" || { rm -f "${tmp}"; exit 1; }
+	) 9<"${lock}"
+}
+
+ensure_i2c_at_boot() {
+	local cfg
+	cfg=$(boot_config)
+	grep -Eq '^[[:blank:]]*dtparam=i2c_arm=on' "${cfg}" 2>/dev/null && return 0
+	# (before the first [section] counts for every Pi; at the end it could land under [pi5] and so on)
+	if grep -q '^[[:blank:]]*\[' "${cfg}"; then
+		printf '[all]\ndtparam=i2c_arm=on\n' >> "${cfg}"
+	else
+		echo 'dtparam=i2c_arm=on' >> "${cfg}"
+	fi
+}
+
+cmd_auto() {
+	if [ -f "${STATE}" ] && [ "$(jq -r .result "${STATE}" 2>/dev/null)" != unknown ]; then
+		echo "MuPiHAT-Erkennung lief schon ($(jq -r '"\(.result), \(.action)"' "${STATE}")) – nichts geändert."
+		return 0
+	fi
+	local r
+	r=$(detect)
+	case "${r}" in
+		unknown)
+			ensure_i2c_at_boot
+			"${SYSTEMCTL}" enable mupi-kn-hat-detect.service >/dev/null 2>&1
+			write_state unknown "I2C ab dem nächsten Start an, Erkennung dann"
+			echo "MuPiHAT: I2C-Bus noch aus – Erkennung beim nächsten Start."
+			;;
+		absent)
+			write_state absent none
+			"${SYSTEMCTL}" disable mupi-kn-hat-detect.service >/dev/null 2>&1
+			echo "Kein MuPiHAT gefunden."
+			;;
+		present)
+			"${SYSTEMCTL}" disable mupi-kn-hat-detect.service >/dev/null 2>&1
+			if hat_active; then
+				write_state present "war schon an"
+				echo "MuPiHAT gefunden, ist schon eingeschaltet."
+				return 0
+			fi
+			if ! set_active || ! "${BIN}/enable_mupihat.sh"; then
+				write_state present "Einschalten fehlgeschlagen"
+				echo "MuPiHAT gefunden, Einschalten fehlgeschlagen – in der Eltern-App unter Akku & Strom › MuPiHAT erneut versuchen." >&2
+				return 1
+			fi
+			[ -x "${BIN}/setting_update.sh" ] && "${BIN}/setting_update.sh" >/dev/null 2>&1
+			write_state present eingeschaltet
+			echo "MuPiHAT gefunden und eingeschaltet (Soundkarte MAX98357A) – wirkt nach dem Neustart."
+			if [ "${BOOT}" = 1 ]; then
+				sync
+				"${SYSTEMCTL}" reboot
+			fi
+			;;
+	esac
+}
+
+[ "$(id -u)" = 0 ] || [ -n "${KN_HAT_TEST}" ] || { echo "Bitte als root starten (sudo)." >&2; exit 1; }
+case "${1:-status}" in
+	detect)
+		r=$(detect)
+		if [ "${JSON}" = 1 ]; then jq -n --arg r "${r}" '{result: $r}'; else echo "${r}"; fi
+		;;
+	auto) cmd_auto ;;
+	status)
+		if [ -f "${STATE}" ]; then
+			if [ "${JSON}" = 1 ]; then cat "${STATE}"; else jq -r '"MuPiHAT: \(.result) (\(.action), \(.date))"' "${STATE}"; fi
+		elif [ "${JSON}" = 1 ]; then
+			echo '{"result": "never"}'
+		else
+			echo "MuPiHAT-Erkennung lief noch nicht."
+		fi
+		;;
+	*) echo "Unbekannter Befehl: $1" >&2; exit 2 ;;
+esac

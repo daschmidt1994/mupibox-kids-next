@@ -51,6 +51,13 @@ KN_NETBIRD_SETUP_KEY=<Setup-Key, am besten einmalig und kurz gültig>
    „MuPiBox Kids Next wird installiert … Das dauert 20–40 Minuten, bitte Strom nicht trennen.“
 4. Am Ende startet die Box neu und zeigt die Kinderoberfläche.
 
+## MuPiHAT
+Der Installer erkennt einen MuPiHAT selbst am Ladechip (BQ25792, I2C-Adresse 0x6B) und schaltet ihn einmalig ein, genau wie der Schalter in der App:
+- Treiber `max98357a` und Soundkarte **MAX98357A** statt `hifiberry-dac`
+- I2C und die MuPiHAT-Dienste
+
+Danach den **Akku-Typ** in der App wählen (Akku & Strom › MuPiHAT). Ist I2C beim ersten Mal noch aus, wird es eingeschaltet und die Erkennung läuft beim nächsten Start (danach ein Neustart). Die Entscheidung fällt nur einmal: Schaltest du den MuPiHAT in der App aus, bleibt er aus. `sudo mupi-kn-hat status` zeigt das Ergebnis.
+
 ## Wenn etwas nicht klappt
 - **Protokolle direkt auf der SD-Karte** (am PC lesbar):
   - `mupibox-kn-firstboot.log`: was der automatische Start gemacht hat
