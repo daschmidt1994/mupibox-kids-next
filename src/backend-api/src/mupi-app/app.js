@@ -10111,8 +10111,8 @@ function cmpVersion(a, b) {
 }
 const installedNumber = () => /\d+(?:\.\d+)+/.exec(upd.info?.installed ?? '')?.[0] ?? null
 
-async function loadUpdates() {
-  const r = await api(`${API}/updates`)
+async function loadUpdates(page, refresh = false) {
+  const r = await api(`${API}/updates${refresh ? '?refresh=1' : ''}`)
   if (!r.ok) throw new Error(`updates ${r.status}`)
   upd.info = r.body
   upd.job = r.body.job
@@ -10145,30 +10145,40 @@ function updJobCard() {
 
 function updatesTop() {
   const i = upd.info
-  const mine = installedNumber()
   const busy = jobRunning()
-  // KN: only Kids Next's own versions - the original MuPiBox's would replace it
-  const rows = ['stable', 'dev']
-    .map((c) => {
-      const rel = i?.latest?.[c]
-      if (!rel) return ''
-      const current = i.channel === c && !(i.update?.channel === c)
-      const older = c === 'stable' && mine && cmpVersion(rel.version, mine) < 0
-      const label = current ? 'Neu installieren' : older ? 'Installieren (älter)' : 'Installieren'
-      const kind = c === 'dev' ? 'danger' : !current && !older ? 'primary' : ''
-      const ver = c === 'dev' && rel.date ? `${rel.version} · Stand ${rel.date}${rel.commit ? ` · ${rel.commit.slice(0, 7)}` : ''}` : rel.version
-      return `<div class="row"><span class="lbl"><b>${esc(CHANNEL_LABEL[c])} · ${esc(ver)}</b><small>${esc(rel.info)}</small></span>
-        <button class="btn ${kind}" data-upd="${c}" ${busy ? 'disabled' : ''}>${label}</button></div>`
-    })
-    .join('')
-  const inst = i?.installedInfo
-  const instText = [i?.installed || '–', inst?.ref === 'kids-next' ? 'Entwicklung' : '', inst?.commit ? inst.commit.slice(0, 7) : ''].filter(Boolean).join(' · ')
+  const inst = i?.installedInfo ?? {}
+  const channel = i?.channel ?? 'dev'
+  const latest = i?.latest?.[channel]
+  const other = channel === 'dev' ? 'stable' : 'dev'
+  const otherRel = i?.latest?.[other]
+  const day = (d) => (d ? new Date(d).toLocaleDateString(LOCALE, { day: 'numeric', month: 'numeric', year: '2-digit' }) : '')
+  const stand = (version, commit, date) => [version, commit ? commit.slice(0, 7) : '', day(date)].filter(Boolean).join(' · ')
+  const checked = i?.checkedAt ? `zuletzt geprüft ${relTime(new Date(i.checkedAt).toISOString())}` : ''
+  // KN: one answer on top - is there something newer? - and one button for it; the channels and "install again" below
+  const head = !latest
+    ? `<div class="note">${icon('info', 18)}<span>Die Versionen ließen sich gerade nicht laden (keine Internetverbindung?).</span></div>`
+    : i.update
+      ? `<div class="card-head"><h2>Neue Version verfügbar</h2><span class="chip warn">Update</span></div>
+         <dl class="kv"><div><dt>Installiert</dt><dd>${esc(stand(inst.version, inst.commit, inst.date))}</dd></div>
+           <div><dt>Neu</dt><dd>${esc(stand(latest.version, latest.commit, latest.date))}</dd></div></dl>
+         ${latest.info ? `<p class="help" style="margin:0">Zuletzt geändert: ${esc(latest.info)}</p>` : ''}
+         <div class="btns"><button class="btn primary" data-upd="${channel}" ${busy ? 'disabled' : ''}>Jetzt aktualisieren</button></div>`
+      : `<div class="card-head"><h2>Die Box ist aktuell</h2><span class="chip ok">aktuell</span></div>
+         <dl class="kv"><div><dt>Installiert</dt><dd>${esc(stand(inst.version || installedNumber(), inst.commit, inst.date))}</dd></div>
+           <div><dt>Kanal</dt><dd>${esc(CHANNEL_LABEL[channel])}</dd></div></dl>`
   return [
     updJobCard(),
-    `<section class="card"><h2>MuPiBox Kids Next</h2><dl class="kv"><div><dt>Installiert</dt><dd>${esc(instText)}</dd></div></dl>
-      ${i?.update ? `<div class="note">${icon('sync', 18)}<span>Neue Version ${esc(i.update.version)} verfügbar.</span></div>` : ''}
-      ${rows || `<p class="help">Die Versionen ließen sich nicht laden (keine Internetverbindung, oder noch keine Version veröffentlicht).</p>`}
-      <p class="help" style="margin:0">Aus dem Kids-Next-Repository (${esc(i?.repo ?? '')}) – nicht aus der originalen MuPiBox. Das Update ist dieselbe Installation wie auf einer neuen Box: Die Box ist dabei 20–40 Minuten nicht nutzbar und startet danach von selbst neu. Einstellungen, Bibliothek, WLAN und Backup-Einrichtung bleiben erhalten; Einstellungen und Bibliothek werden vorher zusätzlich auf der Box gesichert.</p></section>`,
+    `<section class="card">${head}
+      <div class="btns"><button class="btn" id="upd-check" ${busy ? 'disabled' : ''}>${icon('sync', 18)}Jetzt prüfen</button></div>
+      ${checked ? `<p class="help" style="margin:0">${esc(checked)}</p>` : ''}
+      <details class="more"><summary>Neu installieren oder Kanal wechseln</summary>
+        <p class="help">Aus dem Kids-Next-Repository (${esc(i?.repo ?? '')}). Ein Update ist dieselbe Installation wie auf einer neuen Box: 20–40 Minuten, danach startet die Box neu. Einstellungen, Bibliothek, WLAN und Backup-Einrichtung bleiben erhalten.</p>
+        <div class="btns">
+          ${latest && !i.update ? `<button class="btn" data-upd="${channel}" ${busy ? 'disabled' : ''}>${esc(CHANNEL_LABEL[channel])} neu installieren</button>` : ''}
+          ${otherRel ? `<button class="btn${other === 'dev' ? ' danger' : ''}" data-upd="${other}" ${busy ? 'disabled' : ''}>Zu „${esc(CHANNEL_LABEL[other])}“ wechseln (${esc(stand(otherRel.version, otherRel.commit, otherRel.date))})</button>` : ''}
+        </div>
+        ${!otherRel && other === 'stable' ? '<p class="help" style="margin:0">Eine stabile Version gibt es noch nicht.</p>' : ''}
+      </details></section>`,
     // (the system and the backup one below the other: beside the long card on a wide screen, no gap between)
     `<div class="col-stack"><section class="card"><h2>Betriebssystem</h2><p class="help">Aktualisiert die Pakete des Systems (apt). Dauert auf älteren Raspberry Pis bis zu 30 Minuten; die Box läuft dabei weiter. Danach neu starten.</p>
       <div class="btns"><button class="btn" data-upd="os" ${busy ? 'disabled' : ''}>Betriebssystem aktualisieren</button></div></section>
@@ -10239,6 +10249,15 @@ function bindUpdJob() {
 
 function mountUpdates(root, page) {
   for (const b of root.querySelectorAll('[data-upd]')) b.onclick = () => startUpdate(b.dataset.upd, page)
+  const check = $('#upd-check', root)
+  if (check) {
+    check.onclick = async () => {
+      check.disabled = true
+      await loadUpdates(page, true).catch(() => undefined)
+      renderPage(page, false)
+      toast(upd.info?.update ? 'Neue Version gefunden' : 'Keine neue Version')
+    }
+  }
   bindUpdJob()
   if (jobRunning()) pollUpdate(page)
 }

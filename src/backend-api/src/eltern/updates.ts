@@ -154,7 +154,10 @@ export interface Installed {
 
 let stableCache: { at: number; release: Release | null } | null = null
 let devCache: { at: number; release: Release | null } | null = null
-const HOUR = 3600_000
+// (GitHub answers 60 questions an hour per address without a login: every 10 minutes, or on "Jetzt prüfen" - at most
+// every 30 s - is far below)
+const MAX_AGE = 10 * 60_000
+const FORCE_MIN_AGE = 30_000
 
 async function getJson(url: string, accept = 'application/vnd.github+json'): Promise<unknown> {
   const r = await fetch(url, { signal: AbortSignal.timeout(8000), headers: { Accept: accept } })
@@ -163,8 +166,9 @@ async function getJson(url: string, accept = 'application/vnd.github+json'): Pro
 }
 
 /** The newest release (stable) and the development branch now (dev); null where GitHub did not answer. */
-export async function knVersions(): Promise<Record<Channel, Release | null>> {
-  if (!stableCache || Date.now() - stableCache.at > HOUR) {
+export async function knVersions(force = false): Promise<Record<Channel, Release | null>> {
+  const maxAge = force ? FORCE_MIN_AGE : MAX_AGE
+  if (!stableCache || Date.now() - stableCache.at > maxAge) {
     try {
       const rel = (await getJson(`${KN_API}/releases/latest`)) as { tag_name?: string; name?: string; body?: string }
       const tag = String(rel.tag_name ?? '')
@@ -179,7 +183,7 @@ export async function knVersions(): Promise<Record<Channel, Release | null>> {
       if ((e as Error).message === '404') stableCache = { at: Date.now(), release: null }
     }
   }
-  if (!devCache || Date.now() - devCache.at > HOUR) {
+  if (!devCache || Date.now() - devCache.at > maxAge) {
     try {
       const c = (await getJson(`${KN_API}/commits/${KN_BRANCH}`)) as {
         sha?: string
@@ -206,6 +210,11 @@ export async function knVersions(): Promise<Record<Channel, Release | null>> {
     }
   }
   return { stable: stableCache?.release ?? null, dev: devCache?.release ?? null }
+}
+
+/** when GitHub was last asked (ms), for "zuletzt geprüft" */
+export function versionsCheckedAt(): number | null {
+  return devCache?.at ?? stableCache?.at ?? null
 }
 
 export async function readInstalled(file = KN_INSTALLED_JSON): Promise<Installed> {
@@ -288,8 +297,8 @@ async function jobState() {
 
 export function registerUpdateRoutes(router: Router, deps: UpdatesDeps): void {
   /** GET /api/app/updates - the installed version, the repository's, whether there is a newer one, the last job */
-  router.get('/updates', requireSession, async (_req, res) => {
-    const [latest, installed, job] = await Promise.all([knVersions(), readInstalled(), jobState()])
+  router.get('/updates', requireSession, async (req, res) => {
+    const [latest, installed, job] = await Promise.all([knVersions(req.query.refresh === '1'), readInstalled(), jobState()])
     // (a box without installed.json: the version the setup wrote into the config, e.g. "Kids Next 0.1.0")
     const fromConfig = String((deps.getMupiboxConfig()?.mupibox as Record<string, unknown> | undefined)?.version ?? '')
     if (!installed.version) installed.version = /\d+(?:\.\d+)+/.exec(fromConfig)?.[0] ?? null
@@ -301,6 +310,7 @@ export function registerUpdateRoutes(router: Router, deps: UpdatesDeps): void {
       channel,
       latest,
       update: updateFor(installed, latest),
+      checkedAt: versionsCheckedAt(),
       job,
     })
   })
