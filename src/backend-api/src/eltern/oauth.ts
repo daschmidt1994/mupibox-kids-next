@@ -49,6 +49,8 @@ export function buildAuthorizeUrl(deps: {
   protocol: string
   /** Where to send the user after callback success (default '/app'). */
   redirectAfter?: string
+  /** KN: the address the parents' browser shows (http(s)://host[:port]) - the relay sends Spotify's answer there */
+  origin?: string
 }): { url: string; state: string; redirectUri: string } | { error: 'no_client_id' } {
   const cfg = deps.getMupiboxConfig()
   const spotify = (cfg?.spotify as Record<string, unknown> | undefined) ?? {}
@@ -56,9 +58,12 @@ export function buildAuthorizeUrl(deps: {
   if (!clientId) return { error: 'no_client_id' }
 
   purgeExpiredStates()
-  const state = randomBytes(24).toString('hex')
+  const mode = redirectModeOf(cfg)
+  // KN: with the relay the state carries the box's address - the relay page has nothing else to go by
+  const origin = boxOrigin(deps.origin, deps.host) ?? `${deps.protocol}://${deps.host}`
+  const state = `${randomBytes(24).toString('hex')}${mode === 'relay' ? `~${Buffer.from(origin).toString('base64url')}` : ''}`
   // (kept with the state: the code is exchanged with the same address, also when the choice changes in between)
-  const redirectUri = buildRedirectUri(deps.protocol, deps.host, redirectModeOf(cfg))
+  const redirectUri = buildRedirectUri(deps.protocol, deps.host, mode)
   oauthStates.set(state, {
     sessionId: deps.sessionId,
     issued: Date.now(),
@@ -88,8 +93,35 @@ export function buildAuthorizeUrl(deps: {
 //        /api/app/spotify-oauth/callback
 //   legacy: https://<box>/spotify.php - the address of the admin interface before; spotify.php passes Spotify's answer
 //        on to the one above, so the Spotify apps of boxes set up before need no change after an update
+//   relay (KN): https://daschmidt1994.github.io/mupibox-kids-next/callback/ - one address for every box and every way
+//        to it (home network, NetBird, a new IP): a static page (kidsnext/relay) that hands Spotify's answer on to the
+//        box named in the state. The code alone is of no use there: only the box has the client secret.
 export const SPOTIFY_CALLBACK_PATHS = { app: '/app/spotify-callback', legacy: '/spotify.php' } as const
-export type RedirectMode = keyof typeof SPOTIFY_CALLBACK_PATHS
+export const SPOTIFY_RELAY_URI = 'https://daschmidt1994.github.io/mupibox-kids-next/callback/'
+export const REDIRECT_MODES = ['relay', 'app', 'legacy'] as const
+export type RedirectMode = (typeof REDIRECT_MODES)[number]
+
+/** The browser's address of the box, when it is one of this host: http(s)://host[:port], else null */
+export function boxOrigin(origin: string | undefined, host: string): string | null {
+  if (!origin) return null
+  try {
+    const u = new URL(origin)
+    if (
+      (u.protocol !== 'http:' && u.protocol !== 'https:') ||
+      u.username ||
+      u.password ||
+      u.pathname !== '/' ||
+      u.search ||
+      u.hash
+    )
+      return null
+    // (the same host the request came to: a page cannot have the answer sent to another machine)
+    if (u.hostname.replace(/^\[|\]$/g, '') !== host.replace(/^\[|\]$/g, '')) return null
+    return u.origin
+  } catch {
+    return null
+  }
+}
 
 /**
  * Which address the box uses: spotify.redirect when chosen (the app's Zugangsdaten page; set by every login through
@@ -98,21 +130,24 @@ export type RedirectMode = keyof typeof SPOTIFY_CALLBACK_PATHS
  */
 export function redirectModeOf(cfg: MupiboxConfig | undefined): RedirectMode {
   const sp = (cfg?.spotify as Record<string, unknown> | undefined) ?? {}
-  if (sp.redirect === 'app' || sp.redirect === 'legacy') return sp.redirect
+  if (sp.redirect === 'app' || sp.redirect === 'legacy' || sp.redirect === 'relay') return sp.redirect
   const signedIn = typeof sp.refreshToken === 'string' && sp.refreshToken !== ''
   const byApp = typeof sp.authorizedAt === 'string' && sp.authorizedEstimated !== true
-  return signedIn && !byApp ? 'legacy' : 'app'
+  // KN: a new setup takes the relay - one address in the Spotify app, whatever way the box is reached
+  return signedIn && !byApp ? 'legacy' : 'relay'
 }
 
-export function buildRedirectUri(protocol: string, host: string, mode: RedirectMode = 'app'): string {
-  return `${protocol}://${host}${SPOTIFY_CALLBACK_PATHS[mode]}`
+export function buildRedirectUri(protocol: string, host: string, mode: RedirectMode = 'relay'): string {
+  return mode === 'relay' ? SPOTIFY_RELAY_URI : `${protocol}://${host}${SPOTIFY_CALLBACK_PATHS[mode]}`
 }
 
 /**
  * Consume the state from the callback. Returns the original session
  * + redirectAfter, or null if state is unknown / expired / replayed.
  */
-export function consumeOauthState(state: string): { sessionId: string; redirectAfter: string; redirectUri: string } | null {
+export function consumeOauthState(
+  state: string,
+): { sessionId: string; redirectAfter: string; redirectUri: string } | null {
   purgeExpiredStates()
   const entry = oauthStates.get(state)
   if (!entry) return null

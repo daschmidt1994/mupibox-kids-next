@@ -18,7 +18,8 @@ const BOX_ORIGIN = location.origin
 // Where Spotify sends the browser back after the login: https through the box's web server (port 443) - Spotify takes
 // no http addresses except 127.0.0.1. It has to be entered in the Spotify app. Which one the box uses comes from the box
 // (eltern/oauth.ts redirectModeOf: /app/spotify-callback, or /spotify.php for a box set up before the app).
-const spotifyRedirect = () => spot.access?.redirectUris?.[spot.access.redirectMode] ?? `https://${location.hostname}/app/spotify-callback`
+// KN: the relay (one address for every box and every way to it) when nothing else is known
+const spotifyRedirect = () => spot.access?.redirectUris?.[spot.access.redirectMode] ?? 'https://daschmidt1994.github.io/mupibox-kids-next/callback/'
 // numbers and dates in the language of the app (see i18n.js)
 let LOCALE = localeTag()
 
@@ -4893,7 +4894,7 @@ async function connectSpotify() {
   // (the way back says where from: Spotify returns to https://<box>, another address than this one - its storage is
   // not there)
   const back = currentId() === 'wizard' ? '/app?from=wizard' : '/app'
-  const r = await api(`${API}/spotify-oauth/init?return=${encodeURIComponent(back)}`)
+  const r = await api(`${API}/spotify-oauth/init?return=${encodeURIComponent(back)}&origin=${encodeURIComponent(location.origin)}`)
   if (r.ok && r.body?.authorize_url) {
     location.href = r.body.authorize_url
     return
@@ -5163,16 +5164,17 @@ function spotifyAccessTop() {
         <div class="field"><label for="sp-secret">Client Secret</label><div class="input-wrap"><input class="input has-eye mono" id="sp-secret" type="password" ${NO_PW_MANAGER} placeholder="${a.hasSecret ? 'gespeichert – leer lassen = behalten' : 'unter „View client secret“'}"><button type="button" class="eye" data-eye aria-label="Anzeigen">${icon('eye', 18)}</button></div></div>
         <div class="btns"><button class="btn primary" data-sp="save">Speichern</button></div></div>
       <div class="field"><label>Redirect URI</label><div class="field-pick"><input class="input mono" value="${esc(spotifyRedirect())}" readonly aria-label="Redirect URI" ${NO_PW_MANAGER}><button type="button" class="btn sm" data-sp="copyuri">Kopieren</button></div>
-        <small>Muss in deiner Spotify-App unter „Redirect URIs“ stehen, sonst lehnt Spotify die Anmeldung ab.</small></div>
+        <small>${a.redirectMode === 'relay' ? 'Diese eine Adresse in deiner Spotify-App unter „Redirect URIs“ eintragen – sie gilt für alle Boxen, zu Hause und über NetBird.' : 'Muss in deiner Spotify-App unter „Redirect URIs“ stehen, sonst lehnt Spotify die Anmeldung ab.'}</small></div>
       ${
         a.redirectUris
           ? `<div class="field"><label>Welche Adresse steht in deiner Spotify-App?</label><div class="pills small" id="sp-rd" role="radiogroup" aria-label="Redirect URI">${[
-              ['app', '/app/spotify-callback'],
+              ['relay', 'Weiterleitung (empfohlen)'],
+              ['app', 'Adresse der Box'],
               ['legacy', '/spotify.php'],
             ]
               .map(([m, t]) => `<button role="radio" aria-selected="${a.redirectMode === m}" data-rd="${m}" translate="no">${t}</button>`)
               .join('')}</div></div>
-            <details class="more"><summary>Warum zwei Adressen?</summary><p class="help" style="margin:0">${esc('Boxen, die vor der App eingerichtet wurden, nutzen /spotify.php – dann muss in der Spotify-App nichts geändert werden. Beim Zurückkommen von Spotify fragt der Browser wegen des Zertifikats der Box eventuell einmal nach.')}</p></details>`
+            <details class="more"><summary>Welche Adresse nehmen?</summary><p class="help" style="margin:0">${esc('Weiterleitung: eine feste Adresse (GitHub-Seite von Kids Next) für alle Boxen – egal ob du die App über die IP, den Namen oder NetBird geöffnet hast. Die Seite gibt Spotifys Antwort nur an deine Box weiter und speichert nichts; ohne das Client Secret der Box ist sie nutzlos. Adresse der Box: https://<Adresse>/app/spotify-callback – muss für jede Adresse, über die du dich anmeldest, einzeln eingetragen sein; der Browser fragt wegen des Zertifikats einmal nach. /spotify.php: nur für Boxen, die vor der App eingerichtet wurden.')}</p></details>`
           : ''
       }</section>`,
   ]

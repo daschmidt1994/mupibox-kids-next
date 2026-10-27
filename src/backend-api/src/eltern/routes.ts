@@ -91,7 +91,9 @@ import {
   buildAuthorizeUrl,
   buildRedirectUri,
   redirectModeOf,
+  REDIRECT_MODES,
   SPOTIFY_CALLBACK_PATHS,
+  SPOTIFY_RELAY_URI,
   clearSpotifyTokens,
   consumeOauthState,
   exchangeCodeForTokens,
@@ -749,6 +751,7 @@ export function createElternApiRouter(deps: ElternRouterDeps): Router {
       host,
       protocol: 'https',
       redirectAfter: ret,
+      origin: typeof req.query.origin === 'string' ? req.query.origin : undefined,
     })
     if ('error' in result) {
       res.status(400).json({ error: 'no_client_id', redirect_to: '/app#/spotify-setup' })
@@ -818,7 +821,7 @@ export function createElternApiRouter(deps: ElternRouterDeps): Router {
       const spotify = ((cfg.spotify as Record<string, unknown> | undefined) ?? {}) as Record<string, unknown>
       spotify.active = true
       // (the address that worked is the one of this box from now on)
-      spotify.redirect = redirectUri.endsWith(SPOTIFY_CALLBACK_PATHS.legacy) ? 'legacy' : 'app'
+      spotify.redirect = redirectUri === SPOTIFY_RELAY_URI ? 'relay' : redirectUri.endsWith(SPOTIFY_CALLBACK_PATHS.legacy) ? 'legacy' : 'app'
       cfg.spotify = spotify
     })
     applySpotifyAccessToPlayer(true)
@@ -2401,9 +2404,7 @@ export function createElternApiRouter(deps: ElternRouterDeps): Router {
     res.json({
       // the Redirect URI of this box (the one its Spotify app has to name) and both to choose from
       redirectMode: mode,
-      redirectUris: Object.fromEntries(
-        (Object.keys(SPOTIFY_CALLBACK_PATHS) as (keyof typeof SPOTIFY_CALLBACK_PATHS)[]).map((m) => [m, buildRedirectUri('https', spotifyHost(req) ?? 'mupibox', m)]),
-      ),
+      redirectUris: Object.fromEntries(REDIRECT_MODES.map((m) => [m, buildRedirectUri('https', spotifyHost(req) ?? 'mupibox', m)])),
       clientId: str(sp.clientId),
       hasSecret: str(sp.clientSecret) !== '',
       connected: str(sp.accessToken) !== '' && str(sp.refreshToken) !== '',
@@ -2445,12 +2446,12 @@ export function createElternApiRouter(deps: ElternRouterDeps): Router {
     }
   })
 
-  /** POST /api/app/spotify-access/redirect {mode: app|legacy} - which Redirect URI the next login uses (the one the
-   *  parents' Spotify app names). */
+  /** POST /api/app/spotify-access/redirect {mode: relay|app|legacy} - which Redirect URI the next login uses (the one
+   *  the parents' Spotify app names). */
   router.post('/spotify-access/redirect', requireSession, requireCsrf, async (req, res) => {
     const mode = (req.body as { mode?: unknown } | undefined)?.mode
-    if (mode !== 'app' && mode !== 'legacy') {
-      res.status(400).json({ error: 'mode must be app or legacy' })
+    if (!REDIRECT_MODES.includes(mode as (typeof REDIRECT_MODES)[number])) {
+      res.status(400).json({ error: 'mode must be relay, app or legacy' })
       return
     }
     await deps.updateMupiboxConfig((cfg) => {

@@ -284,7 +284,7 @@ Passwörter speichert NetworkManager in `/etc/NetworkManager/system-connections/
 
 Ein NetBird-Name (`mupibox-jakob.netbird.cloud` oder deine eigene DNS-Zone) eignet sich damit nur mit gültigem HTTPS-Zertifikat. Das bekommt die Box im privaten Netz aber nicht ohne öffentliche DNS-Challenge. Außerdem hängt die Anmeldung dann daran, dass das Handy im NetBird ist. **Eine direkte Redirect-URI auf die Box wird deshalb verworfen.**
 
-### 7.2 Lösung: feste Weiterleitungsseite plus PKCE
+### 7.2 Lösung: feste Weiterleitungsseite (umgesetzt, siehe spotify.md)
 ```
 Eltern-Handy                          Spotify                  Weiterleitungsseite (statisch, HTTPS)          Box
      │ "Spotify verbinden" in der Eltern-App (über LAN-IP, Hotspot oder NetBird – egal)                         │
@@ -303,9 +303,9 @@ Eltern-Handy                          Spotify                  Weiterleitungssei
 Eigenschaften:
 - **Unabhängig vom WLAN:** In `state` steht die Adresse, über die die Eltern die App gerade geöffnet haben. Das funktioniert zuhause, im Hotspot und unterwegs über NetBird.
 - **Sicher:**
-  - Der `code` ist ohne den PKCE-Verifier wertlos, und der liegt nur auf der Box. Die Weiterleitungsseite sieht keine Tokens und speichert nichts.
+  - Der `code` ist ohne das Client Secret wertlos, und das liegt nur auf der Box. Die Weiterleitungsseite sieht keine Tokens und speichert nichts. (Umgesetzt ohne PKCE: Die Box ist ein vertraulicher Client mit Secret, ein zusätzlicher Verifier bringt hier nichts. Der Trenner in `state` ist `~`, das Callback-Ziel `/app/spotify-callback`.)
   - `state` wird nach dem Muster in `eltern/oauth.ts` geprüft: Zufallswert, einmal gültig, TTL, an die Session gebunden.
-  - Die Allowlist auf der Seite verhindert, dass sie als offener Redirect missbraucht wird.
+  - Die Allowlist auf der Seite verhindert, dass sie als offener Redirect missbraucht wird. Unbekannte Adressen gibt es nur nach Klick.
 - **Hosting:** eine einzige statische HTML-Datei.
   - Empfehlung: **GitHub Pages** des Forks, also `https://<github-user>.github.io/mupibox-kids-next/callback/`. Kostenlos, HTTPS, kein eigener Server.
   - Alternativ deine eigene Domain auf dem Pangolin-VPS.
