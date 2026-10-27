@@ -81,7 +81,8 @@ if [ -z "${KN_ROOT}" ] || [ ! -f "${KN_ROOT}/kidsnext/installer/lib.sh" ] || [ !
 	[ "${KN_YES}" = 1 ] && ARGS+=(--yes)
 	[ "${KN_NO_REBOOT_ARG}" = 1 ] && ARGS+=(--no-reboot)
 	# (stdin back from the terminal: under "curl | bash" it is the pipe, and the questions below need the keyboard)
-	if [ -r /dev/tty ]; then
+	# (only when there is a terminal: under systemd /dev/tty exists but cannot be opened, and the exec would fail)
+	if (exec < /dev/tty) 2>/dev/null; then
 		exec bash "${SRC_BASE}/current/kidsnext/install.sh" "${ARGS[@]}" < /dev/tty
 	fi
 	exec bash "${SRC_BASE}/current/kidsnext/install.sh" "${ARGS[@]}"

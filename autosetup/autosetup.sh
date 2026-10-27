@@ -868,7 +868,13 @@ STEP=0
 	rm -Rf ${MUPI_SRC} >&3 2>&3
 	sleep 5
 
-} | whiptail --title "MuPiBox Autosetup ${VERSION_LONG}" --gauge "Please wait while installing" 6 60 0
+} | if [ -t 1 ] && command -v whiptail >/dev/null; then
+	whiptail --title "MuPiBox Autosetup ${VERSION_LONG}" --gauge "Please wait while installing" 6 60 0
+else
+	# KN: without a terminal (the automatic installation at the first start) whiptail cannot draw - and when it ended,
+	# every step after it went into a closed pipe. The step names as plain lines instead.
+	awk '/^XXX$/ { n++; next } n % 2 == 1 && !/^[0-9]+$/ { print "    " $0; fflush() }'
+fi
 
 # The log on the boot partition (/boot/firmware on newer systems): readable from the memory card on a PC too, when
 # the box cannot be reached
