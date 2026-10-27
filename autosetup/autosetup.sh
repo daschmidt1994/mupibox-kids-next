@@ -326,6 +326,12 @@ STEP=0
 			[ -e "${SKC}/www/${item}" ] || [ -L "${SKC}/www/${item}" ] || continue
 			cp -a "${SKC}/www/${item}" "${KN_KEEP}/www/${item}" >&3 2>&3 || { echo "## KN: www/${item} could not be kept aside - stopped ##" >&3; exit 1; }
 		done
+		# KN: the server's cache too - Spotify's block of the box (spotify-block.json: lost, the box asked Spotify again at
+		# once and the block went on), the artists' album lists and the covers (lost, everything was asked anew - with
+		# Spotify's 2026 limits enough for a block of a day)
+		if [ -d "${SKC}/cache" ]; then
+			cp -a "${SKC}/cache" "${KN_KEEP}/cache" >&3 2>&3 || { echo "## KN: cache could not be kept aside - stopped ##" >&3; exit 1; }
+		fi
 		sudo -H -u dietpi bash -c "pm2 stop server; pm2 stop spotify-control" >&3 2>&3
 	fi
 	rm -Rf "${SKC}" >&3 2>&3
@@ -389,6 +395,9 @@ STEP=0
 			rm -rf "${SKC}/www/${item}" && cp -a "${KN_KEEP}/www/${item}" "${SKC}/www/${item}" >&3 2>&3 || KN_KEEP_FAILED=1
 		done
 		[ -d "${KN_KEEP}/www/theme-data" ] && { mkdir -p "${SKC}/www/theme-data"; cp -an "${KN_KEEP}/www/theme-data/." "${SKC}/www/theme-data/" >&3 2>&3 || KN_KEEP_FAILED=1; }
+		if [ -d "${KN_KEEP}/cache" ]; then
+			mkdir -p "${SKC}/cache" && cp -an "${KN_KEEP}/cache/." "${SKC}/cache/" >&3 2>&3 || KN_KEEP_FAILED=1
+		fi
 		if [ -z "${KN_KEEP_FAILED}" ] && { [ ! -e "${KN_KEEP}/config/data.json" ] || /usr/bin/jq -e . "${SKC}/server/config/data.json" >/dev/null 2>&1; }; then
 			rm -rf "${KN_KEEP}" >&3 2>&3
 		else
