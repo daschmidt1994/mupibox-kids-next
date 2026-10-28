@@ -716,7 +716,13 @@ def route_address():
     return get_ip_address(iface), iface
 
 
+# (the address sent last: the main loop sends anew when the box's address is another one now)
+systeminfo_ip = None
+
+
 def mqtt_systeminfo():
+    global systeminfo_ip
+
     def put(key, value):
         if value is None:
             return
@@ -735,6 +741,7 @@ def mqtt_systeminfo():
         pass
     put('hostname', socket.gethostname())
     ip, iface = route_address()
+    systeminfo_ip = ip
     put('ip', ip)
     put('architecture', platform.machine())
     put('mac', get_mac_address(iface))
@@ -1035,7 +1042,6 @@ def main():
         # with its cause and the next round follows - before, the handler printed an undefined signum: every error ended
         # the service with a NameError that hid it (issue #154). Paho's own thread reconnects to the broker.
         systeminfo_at = time.monotonic()
-        systeminfo_ip = route_address()[0]
         while True:
             try:
                 ssid, signal_strength, signal_quality = get_wifi()
@@ -1060,10 +1066,8 @@ def main():
                 client.publish(mqtt_topic + '/' + mqtt_clientId + '/battery_connected', battery_connected, qos=0)
                 send_play_information()
                 # (again every 10 minutes, and at once when the address changed - the USB adapter taking over)
-                now_ip = route_address()[0]
-                if time.monotonic() - systeminfo_at > 600 or now_ip != systeminfo_ip:
+                if time.monotonic() - systeminfo_at > 600 or route_address()[0] != systeminfo_ip:
                     systeminfo_at = time.monotonic()
-                    systeminfo_ip = now_ip
                     mqtt_systeminfo()
 
                 if player_active():
