@@ -93,9 +93,21 @@ if [ -z "${KN_ROOT}" ] || [ ! -f "${KN_ROOT}/kidsnext/installer/lib.sh" ] || [ !
 fi
 
 # ---------------------------------------------------------------------------------------------------------------------
-KN_VERSION="$(tr -d '[:space:]' < "${KN_ROOT}/kidsnext/VERSION")"
 # (a git checkout: its commit; the download above set it already)
 [ -z "${KN_COMMIT}" ] && [ -d "${KN_ROOT}/.git" ] && KN_COMMIT=$(git -C "${KN_ROOT}" rev-parse HEAD 2>/dev/null)
+# The version: kidsnext/VERSION (e.g. 0.1) and a running number behind it - the commits since Kids Next left the
+# original (KN_BASE_COMMIT, the same as in backend-api eltern/kn-repo.ts), so every change has a number of its own:
+# 0.1.16, 0.1.17 … Not known (no internet, no git): VERSION alone.
+KN_BASE_COMMIT=fc8939cecaf156b312e00a65f7e57de4e36a773a
+KN_BUILD=""
+if [ -d "${KN_ROOT}/.git" ] && [ "$(git -C "${KN_ROOT}" rev-parse HEAD 2>/dev/null)" = "${KN_COMMIT}" ]; then
+	KN_BUILD=$(git -C "${KN_ROOT}" rev-list --count "${KN_BASE_COMMIT}..HEAD" 2>/dev/null)
+elif [ -n "${KN_COMMIT}" ]; then
+	KN_BUILD=$(curl -fsS -m 20 "https://api.github.com/repos/${KN_REPO}/compare/${KN_BASE_COMMIT}...${KN_COMMIT}" 2>/dev/null |
+		grep -o '"ahead_by": *[0-9]*' | head -n 1 | grep -o '[0-9]*$')
+fi
+KN_VERSION="$(tr -d '[:space:]' < "${KN_ROOT}/kidsnext/VERSION")${KN_BUILD:+.${KN_BUILD}}"
+export KN_VERSION
 KN_INSTALLER="${KN_ROOT}/kidsnext/installer"
 # shellcheck source=installer/lib.sh
 . "${KN_INSTALLER}/lib.sh"
@@ -169,8 +181,6 @@ fi
 kn_log "mode=${KN_MODE} existing=${KN_EXISTING} version=${KN_VERSION}"
 
 KN_RESTORE_HELPER="${KN_ROOT}/kidsnext/backup/mupi-kn-restore"
-# (the version the restore compares a backup with: this one, which is about to be installed)
-export KB_VERSION_FILE="${KN_ROOT}/kidsnext/VERSION"
 if [ "${KN_MODE}" = "restore" ]; then
 	# The backup is chosen and checked before anything is installed: a wrong key or an unreachable NAS stops here,
 	# with the SD card still untouched

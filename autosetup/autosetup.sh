@@ -202,7 +202,7 @@ STEP=0
 	before=$(date +%s)
 	# KN: Kids Next hands over its own checkout (KN_SRC, set by kidsnext/install.sh) - nothing is downloaded then
 	if [ -n "${KN_SRC}" ]; then
-		VERSION="kn-$(tr -d '[:space:]' < "${KN_SRC}/kidsnext/VERSION")"
+		VERSION="kn-${KN_VERSION:-$(tr -d '[:space:]' < "${KN_SRC}/kidsnext/VERSION")}"
 		MUPIBOX_URL="local:${KN_SRC}"
 		VERSION_LONG="Kids Next ${VERSION#kn-}"
 	elif [ -n "${BRANCH}" ]; then

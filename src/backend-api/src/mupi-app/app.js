@@ -10249,7 +10249,8 @@ function updatesTop() {
   const other = channel === 'dev' ? 'stable' : 'dev'
   const otherRel = i?.latest?.[other]
   const day = (d) => (d ? new Date(d).toLocaleDateString(LOCALE, { day: 'numeric', month: 'numeric', year: '2-digit' }) : '')
-  const stand = (version, commit, date) => [version, commit ? commit.slice(0, 7) : '', day(date)].filter(Boolean).join(' · ')
+  // (the running number tells the versions apart - the commit's hash is for nobody here)
+  const stand = (version, _commit, date) => [version, day(date)].filter(Boolean).join(' · ')
   const checked = i?.checkedAt ? `zuletzt geprüft ${relTime(new Date(i.checkedAt).toISOString())}` : ''
   // KN: one answer on top - is there something newer? - and one button for it; the channels and "install again" below
   const head = !latest

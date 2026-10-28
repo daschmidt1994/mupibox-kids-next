@@ -23,6 +23,8 @@ kn_module_base() {
 	rm -rf "${tmp}"
 	mkdir -p "${tmp}"
 	tar -C "${KN_ROOT}/kidsnext" --exclude=docs --exclude=tests -cf - . | tar -C "${tmp}" -xf - || return 1
+	# (the whole version, with its running number: the backup and the restore take it from here)
+	[ -n "${KN_VERSION}" ] && printf '%s\n' "${KN_VERSION}" > "${tmp}/VERSION"
 	# what the app and the scripts took from the original's GitHub before (templates, the Wi-Fi driver scripts): from
 	# this version on the box - nothing is loaded from upstream any more
 	mkdir -p "${tmp}/upstream"

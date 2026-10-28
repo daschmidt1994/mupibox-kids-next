@@ -9,13 +9,13 @@ import { channelOf, type Installed, type Release, RUN_SH, readInstalled, updateF
 
 const inst = (o: Partial<Installed>): Installed => ({ version: null, ref: null, commit: null, date: null, ...o })
 const stable: Release = { version: '0.2.0', ref: 'v0.2.0', info: '' }
-const dev: Release = { version: '0.2.1', ref: 'kids-next', info: '', commit: 'b'.repeat(40), date: '2026-10-28' }
+const dev: Release = { version: '0.2.17', ref: 'kids-next', info: '', commit: 'b'.repeat(40), date: '2026-10-28' }
 
 describe('kn updates', () => {
   it('a box on the development branch follows its commits', () => {
     const box = inst({ version: '0.1.0', ref: 'kids-next', commit: 'a'.repeat(40) })
     assert.equal(channelOf(box), 'dev')
-    assert.deepEqual(updateFor(box, { stable, dev }), { channel: 'dev', version: '0.2.1 · Stand 2026-10-28 (bbbbbbb)' })
+    assert.deepEqual(updateFor(box, { stable, dev }), { channel: 'dev', version: '0.2.17' })
     assert.equal(updateFor({ ...box, commit: 'b'.repeat(40) }, { stable, dev }), null)
   })
 

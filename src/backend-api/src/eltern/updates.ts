@@ -15,7 +15,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import type { Router } from 'express'
 import type { MupiboxConfig } from '../models/mupibox-config.model'
-import { KN_API, KN_BRANCH, KN_INSTALLED_JSON, KN_RAW, KN_REPO } from './kn-repo'
+import { KN_API, KN_BASE_COMMIT, KN_BRANCH, KN_INSTALLED_JSON, KN_RAW, KN_REPO } from './kn-repo'
 import { requireCsrf, requireSession } from './middleware'
 
 export interface UpdatesDeps {
@@ -190,7 +190,12 @@ export async function knVersions(force = false): Promise<Record<Channel, Release
         commit?: { message?: string; committer?: { date?: string } }
       }
       const v = await fetch(`${KN_RAW}/kidsnext/VERSION`, { signal: AbortSignal.timeout(8000) })
-      const version = v.ok ? (await v.text()).trim() : ''
+      const base = v.ok ? (await v.text()).trim() : ''
+      // (its running number, as install.sh counts it: the commits since the original)
+      const cmp = c.sha
+        ? ((await getJson(`${KN_API}/compare/${KN_BASE_COMMIT}...${c.sha}`).catch(() => ({}))) as { ahead_by?: number })
+        : {}
+      const version = Number.isInteger(cmp.ahead_by) ? `${base}.${cmp.ahead_by}` : base
       devCache = {
         at: Date.now(),
         release: c.sha
@@ -253,7 +258,7 @@ export function updateFor(
   if (!next) return null
   if (channel === 'dev') {
     if (!next.commit || next.commit === installed.commit) return null
-    return { channel, version: `${next.version} · Stand ${next.date ?? ''} (${next.commit.slice(0, 7)})` }
+    return { channel, version: next.version }
   }
   if (!installed.version) return null
   return compareVersions(next.version, installed.version) > 0 ? { channel, version: next.version } : null
@@ -299,7 +304,7 @@ export function registerUpdateRoutes(router: Router, deps: UpdatesDeps): void {
   /** GET /api/app/updates - the installed version, the repository's, whether there is a newer one, the last job */
   router.get('/updates', requireSession, async (req, res) => {
     const [latest, installed, job] = await Promise.all([knVersions(req.query.refresh === '1'), readInstalled(), jobState()])
-    // (a box without installed.json: the version the setup wrote into the config, e.g. "Kids Next 0.1.0")
+    // (a box without installed.json: the version the setup wrote into the config, e.g. "Kids Next 0.1.17")
     const fromConfig = String((deps.getMupiboxConfig()?.mupibox as Record<string, unknown> | undefined)?.version ?? '')
     if (!installed.version) installed.version = /\d+(?:\.\d+)+/.exec(fromConfig)?.[0] ?? null
     const channel = channelOf(installed)

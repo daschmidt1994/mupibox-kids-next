@@ -260,8 +260,9 @@ kb_excludes() {
 	echo "${KN_FS}/home/dietpi/MuPiBox/media/cover/.thumbs"
 }
 
+# (the installer's KN_VERSION: the version about to be installed, with its running number - see install.sh)
 kb_kn_version() {
-	if [ -f "${KB_VERSION_FILE}" ]; then tr -d '[:space:]' < "${KB_VERSION_FILE}"; else echo "0.0.0"; fi
+	if [ -n "${KN_VERSION}" ]; then echo "${KN_VERSION}"; elif [ -f "${KB_VERSION_FILE}" ]; then tr -d '[:space:]' < "${KB_VERSION_FILE}"; else echo "0.0.0"; fi
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
