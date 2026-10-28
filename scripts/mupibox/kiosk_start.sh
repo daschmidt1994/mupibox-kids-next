@@ -42,4 +42,13 @@ while [ "$i" -lt 240 ] && ! curl -s -o /dev/null --max-time 1 http://localhost:8
 	i=$((i + 1))
 done
 
-exec "$@"
+# KN: not exec'd any more - when Chromium ends while the box shuts down (mupi_shutdown.sh ends it), xinit would end the
+# X server with it: the screen went to the black console for 0.5 s until the goodbye picture was drawn again (recorded
+# on Jakob's box). While the box shuts down, X stays with the goodbye picture as its background (show_goodbye.sh) until
+# the session ends; any other end of Chromium (a kiosk restart) ends X as before.
+"$@"
+RC=$?
+case "$(systemctl is-system-running 2>/dev/null)" in
+	stopping) sleep 60 ;;
+esac
+exit "${RC}"

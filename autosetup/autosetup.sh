@@ -734,6 +734,9 @@ STEP=0
 	sed -i 's/session    optional   pam_motd.so motd\=\/run\/motd.dynamic/#session    optional   pam_motd.so motd\=\/run\/motd.dynamic/g' /etc/pam.d/login >&3 2>&3
 	sed -i 's/session    optional   pam_motd.so noupdate/#session    optional   pam_motd.so noupdate/g' /etc/pam.d/login >&3 2>&3
 	sed -i 's/ExecStart\=-\/sbin\/agetty -a dietpi -J \%I \$TERM/ExecStart\=-\/sbin\/agetty --skip-login --noclear --noissue --login-options "-f dietpi" \%I \$TERM/g' /etc/systemd/system/getty@tty1.service.d/dietpi-autologin.conf >&3 2>&3
+	# KN: the same for root, who logs in on tty1 on DietPi 10 (-a root): its "Debian GNU/Linux 13 … login: root
+	# (automatic login)" was written over the boot screen as blue bars (recorded at boot on Jakob's box)
+	sed -i 's/ExecStart\=-\/sbin\/agetty -a root -J \%I \$TERM/ExecStart\=-\/sbin\/agetty --skip-login --noclear --noissue --login-options "-f root" \%I \$TERM/g' /etc/systemd/system/getty@tty1.service.d/dietpi-autologin.conf >&3 2>&3
 	/boot/dietpi/func/dietpi-set_hardware gpumemsplit 128 >&3 2>&3
 	/boot/dietpi/func/dietpi-set_hardware headless 0 >&3 2>&3
 	/boot/dietpi/func/dietpi-set_hardware rpi-opengl disable >&3 2>&3
