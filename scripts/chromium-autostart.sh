@@ -57,7 +57,10 @@
 # drawn once more instead: the login's lines (written blue on blue, but as blocks over the picture) are gone with it.
 BOOT_PIC="/home/dietpi/MuPiBox/sysmedia/images/bootscreen/splash-$(cat /home/dietpi/MuPiBox/sysmedia/images/bootscreen/current 2>/dev/null).png"
 [ -f "${BOOT_PIC}" ] || BOOT_PIC="/home/dietpi/MuPiBox/sysmedia/bootscreens/prerendered/en/splash-karte.png"
-[ -f "${BOOT_PIC}" ] && /usr/bin/fbv -c -y "${BOOT_PIC}" >/dev/null 2>&1 &
+# (only before X runs: drawn on the screen of a running X, the picture stayed under the display wherever it did not
+# draw again - a second start of this script while X still runs must not do that)
+X_RUNNING=$(pgrep -x Xorg)
+[ -z "${X_RUNNING}" ] && [ -f "${BOOT_PIC}" ] && /usr/bin/fbv -c -y "${BOOT_PIC}" >/dev/null 2>&1 &
 /usr/local/bin/mupibox/./startup.sh &
 
 rm ~/.config/chromium/Singleton*
@@ -151,13 +154,18 @@ STARTX='xinit'
 # KN: X taking the console repainted it over the boot screen (blue blocks for the 4-5 s until X was ready, recorded at
 # boot on Jakob's box). Once X has it, the console no longer draws: the boot screen is drawn again then and stays
 # until X paints its own background (kiosk_start.sh puts the boot screen there too).
-(
+# Only for an X server this script starts (none ran before, and the one found is at most 2 s old), only in its first
+# second - X paints its own background 4 s after its start at boot.
+[ -z "${X_RUNNING}" ] && (
 	i=0
-	while [ "$i" -lt 50 ] && ! pgrep -x Xorg > /dev/null; do
+	while [ "$i" -lt 50 ]; do
+		age=$(ps -o etimes= -C Xorg 2>/dev/null | head -n 1 | tr -d ' ')
+		[ -n "${age}" ] && break
 		sleep 0.1
 		i=$((i + 1))
 	done
-	for wait in 0.4 0.8; do
+	[ -n "${age}" ] && [ "${age}" -le 2 ] || exit 0
+	for wait in 0.4 0.4; do
 		sleep "${wait}"
 		[ -f "${BOOT_PIC}" ] && /usr/bin/fbv -c -y "${BOOT_PIC}" > /dev/null 2>&1
 	done
