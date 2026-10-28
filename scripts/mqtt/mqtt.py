@@ -694,28 +694,35 @@ def get_ip_address(interface):
         print("Exception: ", e)
         return None
 
+# KN: the box's fixed facts, retained: sent once at the connection and not kept, they were lost whenever Home
+# Assistant was not listening at that moment (just after the discovery, a restart of HA) - "Unbekannt" for hostname,
+# IP, MAC, system, Pi and version. Sent again every 10 minutes from the main loop (the IP may change).
 def mqtt_systeminfo():
-    with open('/etc/os-release', 'r') as file:
-        os_release_content = file.read()
-    match = re.search(r'PRETTY_NAME="(.+?)"', os_release_content)
-    if match:
-        pretty_name = match.group(1)
-        os_name = pretty_name.split('"')[-1]
-        client.publish(mqtt_topic + '/' + mqtt_clientId + '/os', os_name, qos=0, retain=False)
-    else:
-        print("PRETTY_NAME not found in /etc/os-release")
+    def put(key, value):
+        if value is None:
+            return
+        client.publish(mqtt_topic + '/' + mqtt_clientId + '/' + key, str(value).replace('\x00', '').strip(), qos=0, retain=True)
 
-    raspi = subprocess.check_output(["cat", "/sys/firmware/devicetree/base/model"]).decode("utf-8")
-    client.publish(mqtt_topic + '/' + mqtt_clientId + '/raspi', raspi, qos=0, retain=False)
-    hostname = subprocess.check_output(["hostname"]).decode("utf-8")
-    client.publish(mqtt_topic + '/' + mqtt_clientId + '/hostname', hostname, qos=0, retain=False)
-    ip = get_ip_address(wifi_interface())
-    client.publish(mqtt_topic + '/' + mqtt_clientId + '/ip', ip, qos=0, retain=False)
-    architecture = subprocess.check_output(["uname", "-m"]).decode("utf-8")
-    client.publish(mqtt_topic + '/' + mqtt_clientId + '/architecture', architecture, qos=0, retain=False)
-    client.publish(mqtt_topic + '/' + mqtt_clientId + '/mac', get_mac_address(wifi_interface()), qos=0, retain=False)
-    client.publish(mqtt_topic + '/' + mqtt_clientId + '/version', mupi_version, qos=0)
-    client.publish(mqtt_topic + '/' + mqtt_clientId + '/admininterface', 'http://' + ip, qos=0)
+    try:
+        with open('/etc/os-release', 'r') as file:
+            match = re.search(r'PRETTY_NAME="(.+?)"', file.read())
+        put('os', match.group(1) if match else None)
+    except OSError:
+        pass
+    try:
+        with open('/sys/firmware/devicetree/base/model', 'r') as file:
+            put('raspi', file.read())
+    except OSError:
+        pass
+    put('hostname', socket.gethostname())
+    iface = wifi_interface()
+    ip = get_ip_address(iface)
+    put('ip', ip)
+    put('architecture', platform.machine())
+    put('mac', get_mac_address(iface))
+    put('version', mupi_version)
+    if ip:
+        put('admininterface', 'http://' + ip + '/app/')
 
 # Callback function for when the client receives a CONNACK response from the server - at the first connection and at
 # every one after the broker was gone (restarted, the network lost): the subscriptions, the Home Assistant discovery
@@ -844,12 +851,33 @@ def send_play_information():
         print("Exception: ", e)
  #       return None, None, None, None, None, None, None, None, None, None
 
+# KN: what the display shows, read from its framebuffer (the X server draws into /dev/fb0): scrot gave a black
+# picture on the box, and it ran every 5 s whether a picture was wanted or not. scrot only as a fallback.
 def get_screenshot():
     try:
+        from io import BytesIO
+        from PIL import Image
+        base = '/sys/class/graphics/fb0/'
+        with open(base + 'virtual_size') as f:
+            width, height = (int(v) for v in f.read().strip().split(','))
+        with open(base + 'bits_per_pixel') as f:
+            bpp = int(f.read().strip())
+        with open(base + 'stride') as f:
+            stride = int(f.read().strip())
+        with open('/dev/fb0', 'rb') as f:
+            raw = f.read(stride * height)
+        mode = {32: 'BGRX', 16: 'BGR;16'}[bpp]
+        img = Image.frombuffer('RGB', (width, height), raw, 'raw', mode, stride, 1)
+        out = BytesIO()
+        img.save(out, format='PNG', optimize=True)
+        return base64.b64encode(out.getvalue()).decode('utf-8')
+    except Exception as e:
+        print("Screenshot from the framebuffer failed, trying scrot: ", e, flush=True)
+    try:
+        subprocess.run(["rm", "-f", "/tmp/mqtt_screen.png"])
+        subprocess.run(["sudo", "-H", "-u", "dietpi", "bash", "-c", "DISPLAY=:0 scrot /tmp/mqtt_screen.png"], timeout=15)
         with open("/tmp/mqtt_screen.png", "rb") as f:
-            img_bytes = f.read()
-        img_base64 = base64.b64encode(img_bytes).decode("utf-8")
-        return img_base64
+            return base64.b64encode(f.read()).decode("utf-8")
     except Exception as e:
         print("Exception: ", e)
         return None
@@ -988,6 +1016,7 @@ def main():
         # One failed round (a file being rewritten, the broker gone for a moment, a value that does not parse) is logged
         # with its cause and the next round follows - before, the handler printed an undefined signum: every error ended
         # the service with a NameError that hid it (issue #154). Paho's own thread reconnects to the broker.
+        systeminfo_at = time.monotonic()
         while True:
             try:
                 ssid, signal_strength, signal_quality = get_wifi()
@@ -1011,9 +1040,9 @@ def main():
                 client.publish(mqtt_topic + '/' + mqtt_clientId + '/bat_type', bat_type, qos=0)
                 client.publish(mqtt_topic + '/' + mqtt_clientId + '/battery_connected', battery_connected, qos=0)
                 send_play_information()
-
-                subprocess.run(["sudo", "rm", "/tmp/mqtt_screen.png"])
-                subprocess.run(["sudo", "-H", "-u", "dietpi", "bash", "-c", "DISPLAY=:0 scrot /tmp/mqtt_screen.png"])
+                if time.monotonic() - systeminfo_at > 600:
+                    systeminfo_at = time.monotonic()
+                    mqtt_systeminfo()
 
                 if player_active():
                     sleeptime = mqtt_refresh
