@@ -697,6 +697,25 @@ def get_ip_address(interface):
 # KN: the box's fixed facts, retained: sent once at the connection and not kept, they were lost whenever Home
 # Assistant was not listening at that moment (just after the discovery, a restart of HA) - "Unbekannt" for hostname,
 # IP, MAC, system, Pi and version. Sent again every 10 minutes from the main loop (the IP may change).
+def route_address():
+    """The address and adapter the box reaches its network through now (the default route): right after the start the
+    onboard WiFi has an address for a moment until the USB adapter takes over, and that one was sent."""
+    ip = None
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('192.0.2.1', 9))  # (no packet is sent: only the route is chosen)
+        ip = s.getsockname()[0]
+        s.close()
+    except OSError:
+        pass
+    if ip:
+        for iface in ni.interfaces():
+            if any(a.get('addr') == ip for a in ni.ifaddresses(iface).get(ni.AF_INET, [])):
+                return ip, iface
+    iface = wifi_interface()
+    return get_ip_address(iface), iface
+
+
 def mqtt_systeminfo():
     def put(key, value):
         if value is None:
@@ -715,8 +734,7 @@ def mqtt_systeminfo():
     except OSError:
         pass
     put('hostname', socket.gethostname())
-    iface = wifi_interface()
-    ip = get_ip_address(iface)
+    ip, iface = route_address()
     put('ip', ip)
     put('architecture', platform.machine())
     put('mac', get_mac_address(iface))
@@ -1017,6 +1035,7 @@ def main():
         # with its cause and the next round follows - before, the handler printed an undefined signum: every error ended
         # the service with a NameError that hid it (issue #154). Paho's own thread reconnects to the broker.
         systeminfo_at = time.monotonic()
+        systeminfo_ip = route_address()[0]
         while True:
             try:
                 ssid, signal_strength, signal_quality = get_wifi()
@@ -1040,8 +1059,11 @@ def main():
                 client.publish(mqtt_topic + '/' + mqtt_clientId + '/bat_type', bat_type, qos=0)
                 client.publish(mqtt_topic + '/' + mqtt_clientId + '/battery_connected', battery_connected, qos=0)
                 send_play_information()
-                if time.monotonic() - systeminfo_at > 600:
+                # (again every 10 minutes, and at once when the address changed - the USB adapter taking over)
+                now_ip = route_address()[0]
+                if time.monotonic() - systeminfo_at > 600 or now_ip != systeminfo_ip:
                     systeminfo_at = time.monotonic()
+                    systeminfo_ip = now_ip
                     mqtt_systeminfo()
 
                 if player_active():
