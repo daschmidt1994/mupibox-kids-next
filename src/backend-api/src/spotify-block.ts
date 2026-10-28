@@ -93,6 +93,19 @@ export function noteSpotifyBlock(until: number, source: string, reason: string):
   if (current && current.until >= until) return
   current = { until, source, reason, since: Date.now() }
   write()
+  for (const listener of notedListeners) {
+    try {
+      listener()
+    } catch {
+      // a listener's trouble is its own
+    }
+  }
+}
+
+const notedListeners: Array<() => void> = []
+/** KN: told when Spotify set a new block (spotify-budget.ts lowers the box's own limits below what led to it). */
+export function onSpotifyBlockNoted(listener: () => void): void {
+  notedListeners.push(listener)
 }
 
 /** The block in force, or null (one whose time is over is removed). */

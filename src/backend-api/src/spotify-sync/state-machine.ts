@@ -89,7 +89,7 @@ export async function runSync(trigger: SyncTrigger, deps: RunSyncDeps): Promise<
       removals: 0,
       conflictsCount: 0,
     },
-    extras: { reason?: string; retryAfterSeconds?: number; nextScheduled?: string | null } = {},
+    extras: { reason?: string; retryAfterSeconds?: number; nextScheduled?: string | null; local?: boolean } = {},
   ): RunSyncResult => {
     const endedAt = new Date()
     const result: RunSyncResult = {
@@ -112,12 +112,14 @@ export async function runSync(trigger: SyncTrigger, deps: RunSyncDeps): Promise<
     if (state === 'RATE_LIMITED' && wait > 0) {
       const until = new Date(endedAt.getTime() + wait * 1000)
       rateLimitedUntil = until.toISOString()
-      // (the display's lists wait for it too)
-      noteSpotifyBlock(until.getTime(), 'sync', extras.reason ?? '429')
+      // (the display's lists wait for it too - KN: not for the box's own limit, spotify-budget.ts: Spotify blocks nothing)
+      if (!extras.local) noteSpotifyBlock(until.getTime(), 'sync', extras.reason ?? '429')
       extras = { ...extras, nextScheduled: extras.nextScheduled ?? rateLimitedUntil }
       if (!stillBlocked)
         console.warn(
-          `${new Date().toLocaleString()}: [spotify-sync] Spotify blocks this app's requests for ${Math.ceil(wait / 60)} min (until ${until.toLocaleString()}) - the sync waits until then`,
+          extras.local
+            ? `${new Date().toLocaleString()}: [spotify-sync] the box's own limit for Spotify requests is reached - the sync carries on at ${until.toLocaleString()}`
+            : `${new Date().toLocaleString()}: [spotify-sync] Spotify blocks this app's requests for ${Math.ceil(wait / 60)} min (until ${until.toLocaleString()}) - the sync waits until then`,
         )
     }
     // Persist to state file.
@@ -335,17 +337,24 @@ function mapSpotifyError(
   // bumps the caller's counters: bumpFailureCounter() returns a new object, and the result used
   // to be dropped here, so discovery/resolve failures never reached the Telegram thresholds
   bump: (kind: SyncFailureKind) => void,
-  finalise: (state: SyncState, c?: { additions: number; updates: number; removals: number; conflictsCount: number }, e?: { reason?: string; retryAfterSeconds?: number }) => RunSyncResult,
+  finalise: (
+    state: SyncState,
+    c?: { additions: number; updates: number; removals: number; conflictsCount: number },
+    e?: { reason?: string; retryAfterSeconds?: number; local?: boolean },
+  ) => RunSyncResult,
 ): RunSyncResult {
   if (err instanceof SpotifyApiException) {
     const k = err.detail.kind
     const kind: SyncFailureKind = k === 'auth' ? 'auth' : k === 'rate-limit' ? 'rate-limit' : k === 'network' ? 'network' : 'internal'
-    bump(kind)
+    // (KN: held back by the box's own limit - no failure, the next run carries on)
+    const local = err.detail.kind === 'rate-limit' && err.detail.local === true
+    if (!local) bump(kind)
     const mappedState: SyncState =
       kind === 'auth' ? 'AUTH_FAILED' : kind === 'rate-limit' ? 'RATE_LIMITED' : kind === 'network' ? 'NETWORK_ERROR' : 'INTERNAL_ERROR'
     return finalise(mappedState, undefined, {
       reason: err.detail.reason,
       retryAfterSeconds: 'retryAfterSeconds' in err.detail ? err.detail.retryAfterSeconds : undefined,
+      local,
     })
   }
   return finalise('INTERNAL_ERROR', undefined, { reason: `unexpected error: ${(err as Error).message}` })

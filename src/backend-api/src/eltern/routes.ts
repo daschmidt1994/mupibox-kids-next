@@ -66,6 +66,7 @@ import { registerUpdateRoutes } from './updates'
 // KN: Kids Next NAS backup and restore
 import { registerKnBackupRoutes } from './kn-backup'
 import { registerKnNetbirdRoutes } from './kn-netbird'
+import { registerKnSpotifyLimitRoutes } from './kn-spotify-limits'
 import { registerTlsRoutes, tlsOf } from './tls'
 import { type LocalLibraryDeps, registerLocalUploadRoutes } from './upload'
 import { registerLocalDownloadRoutes } from './local-download'
@@ -433,6 +434,7 @@ export function createElternApiRouter(deps: ElternRouterDeps): Router {
   registerUpdateRoutes(router, { getMupiboxConfig: deps.getMupiboxConfig })
   registerKnBackupRoutes(router)
   registerKnNetbirdRoutes(router)
+  registerKnSpotifyLimitRoutes(router)
   registerTlsRoutes(router, { getMupiboxConfig: deps.getMupiboxConfig, updateMupiboxConfig: deps.updateMupiboxConfig })
   registerHealthRoutes(router, { getMupiboxConfig: deps.getMupiboxConfig })
   registerPodcastRoutes(router, {

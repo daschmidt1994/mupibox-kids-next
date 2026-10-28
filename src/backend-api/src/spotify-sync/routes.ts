@@ -17,6 +17,7 @@ import { loadSpotifySyncConfig, loadSpotifyTokenStore } from './config-loader'
 import { getValidAccessToken, requiresReAuth, tokenStillValid } from './auth'
 import { fetchArtistAlbums, SpotifyApiException } from './playlists'
 import { spotifyBlock } from '../spotify-block'
+import { artistAlbumsProgress } from '../artist-albums-store'
 import { readStateFile } from './state-file'
 import { triggerManualSync } from './scheduler'
 import type { RunSyncDeps } from './state-machine'
@@ -217,27 +218,32 @@ export function createSpotifySyncRouter(deps: RunSyncDeps): Router {
     const sub = (config.artists ?? []).find((a) => a.id === artistId)
     let albums
     try {
-      albums = await fetchArtistAlbums(artistId, tok.token, sub?.album_types ?? 'album')
+      // (KN: the albums loaded so far - a big artist's other pages follow in the background, see artist-albums-store.ts)
+      albums = await fetchArtistAlbums(artistId, tok.token, sub?.album_types ?? 'album', { partial: true })
     } catch (err) {
       // (Spotify blocks the box: the app says so - see spotify-block.ts)
       if (err instanceof SpotifyApiException && err.detail.kind === 'rate-limit') {
-        res.status(429).json({ error: 'spotify_blocked', retryAfterSeconds: err.detail.retryAfterSeconds })
+        res.status(429).json({ error: 'spotify_blocked', retryAfterSeconds: err.detail.retryAfterSeconds, local: err.detail.local === true })
         return
       }
       res.status(502).json({ error: `artist albums fetch failed: ${(err as Error).message}` })
       return
     }
     albums.sort((a, b) => (a.release_date ?? '').localeCompare(b.release_date ?? ''))
+    // (a list not complete yet holds the newest albums: the older ones before them still count for the positions)
+    const progress = artistAlbumsProgress(artistId, sub?.album_types ?? 'album')
+    const missing = progress ? Math.max(0, progress.total - albums.length) : 0
     const from = Math.max(1, sub?.range_from ?? 1)
-    const to = sub?.range_to && sub.range_to > 0 ? sub.range_to : albums.length
+    const to = sub?.range_to && sub.range_to > 0 ? sub.range_to : missing + albums.length
     const excluded = new Set(sub?.exclude_album_ids ?? [])
     res.json({
       artistId,
       subscribed: !!sub,
       range_from: sub?.range_from,
       range_to: sub?.range_to,
+      loading: progress ? { have: albums.length, total: progress.total } : undefined,
       albums: albums.map((al, i) => {
-        const position = i + 1
+        const position = missing + i + 1
         return {
           id: al.id,
           name: al.name,

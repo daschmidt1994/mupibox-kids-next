@@ -53,6 +53,8 @@ import { SUDO_BACKUP_SNIPPET, backupBeforeWrite } from './file-backup'
 import { readEmbeddedPicture } from './embedded-cover'
 import { acquireLock, releaseLock, staleReason } from './file-lock'
 import { type AlbumFillDeps, fillSpotifyAlbums, isBareAlbum, startSpotifyAlbumFill } from './spotify-album-fill'
+// KN: how far a big artist's album list is
+import { artistAlbumsProgress } from './artist-albums-store'
 import { coverHidden } from './hidden-covers'
 import { OnlineCovers } from './online-covers'
 import { ardFeed, isArdFeed } from './ard-sounds'
@@ -4308,7 +4310,9 @@ app.get('/api/spotify/artist/:artistId/albums', async (req, res) => {
     // getAllArtistAlbums
     if (req.query.all === '1') {
       const items = await spotifyApiService.getAllArtistAlbums(artistId, albumTypes)
-      res.status(200).json({ items, total: items.length, limit: items.length, offset: 0 })
+      // (KN: a big artist's list not complete yet - its other pages follow in the background, artist-albums-store.ts)
+      const loading = artistAlbumsProgress(artistId, albumTypes)
+      res.status(200).json({ items, total: items.length, limit: items.length, offset: 0, ...(loading ? { loading } : {}) })
       return
     }
     const results = await spotifyApiService.getArtistAlbums(artistId, albumTypes, limit, offset)

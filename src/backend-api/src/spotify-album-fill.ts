@@ -9,6 +9,7 @@ import { readFile } from 'node:fs/promises'
 import { withLock } from './file-lock'
 import type { SpotifyApiService } from './services/spotify-api.service'
 import { spotifyBlock } from './spotify-block'
+import { asBackground } from './spotify-budget'
 
 export interface AlbumFillDeps {
   dataFile: string
@@ -61,9 +62,12 @@ export async function fillSpotifyAlbums(deps: AlbumFillDeps, why: string): Promi
       // (Spotify started blocking meanwhile: each further request only keeps the block going)
       if (spotifyBlock()) break
       try {
-        const album = await spotify.getAlbum(id)
+        // (KN: as background requests - within their share of the box's limits, spotify-budget.ts)
+        const album = await asBackground(() => spotify.getAlbum(id))
         if (text(album?.name)) found.set(id, album)
       } catch (err) {
+        // (KN: the box's own limit is reached - the others wait for the next run too)
+        if ((err as { localLimit?: boolean })?.localLimit) break
         // asked again at the next run - not an album Spotify does not know (any more): not every 6 h until a restart
         const status = (err as { statusCode?: number; status?: number })?.statusCode ?? (err as { status?: number })?.status
         if (status === 400 || status === 404) unknown.add(id)

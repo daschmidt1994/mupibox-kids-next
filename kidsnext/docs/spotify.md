@@ -29,3 +29,14 @@ In der Eltern-App unter Bibliothek › Spotify › Zugangsdaten:
 
 ## „Spotify sperrt die Box gerade“
 Fragt die Box Spotify zu oft, z. B. wenn man in der Eltern-App viele Künstler mit vielen Alben hintereinander öffnet, sperrt Spotify die App für Stunden bis zu einem Tag (HTTP 429). Die Box merkt sich die Sperre und fragt bis zum Ende nicht mehr. Jede weitere Anfrage würde die Sperre verlängern. Gespeicherte Inhalte bleiben in der Liste. Ab 0.1.0 (Commit nach ebb2ee0c) übersteht die gemerkte Sperre auch Updates, ebenso die Albumlisten der Künstler.
+
+## Eigenes Anfrage-Limit der Box (wie bei MuPiBox NG)
+Damit es gar nicht erst zu einer Sperre kommt, zählt die Box jede Anfrage an Spotify: die letzten 30 Sekunden, die letzte Stunde und die letzten 24 Stunden. Die Zählung bleibt auch über einen Neustart erhalten. Ist ein Limit erreicht, hält die Box weitere Anfragen zurück. Was schon auf der Box liegt, spielt weiter.
+
+- **Einstellen:** Bibliothek › Spotify › Sync-Einstellungen › „Spotify-Anfragen“. Dort stehen die aktuellen Zahlen, die letzte Sperre durch Spotify und die drei Limits. Standard: 15 in 30 s, 120 pro Stunde, 600 pro Tag.
+- **Antippen geht vor:** Smart-Sync, das Nachladen von Albumlisten und das Auffrischen des Zwischenspeichers dürfen höchstens die Hälfte jedes Limits nutzen. Zwischen zwei solchen Hintergrund-Anfragen liegen mindestens 3 s.
+- **Große Künstler seitenweise:** Wird ein Künstler zum ersten Mal geöffnet, holt die Box sofort die erste Seite mit den 10 neuesten Alben. Den Rest lädt sie im Hintergrund nach. Die App zeigt dann z. B. „10 von 70 Alben geladen“. Bereits Geladenes bleibt gespeichert, beim nächsten Öffnen geht es dort weiter. Der Smart-Sync wartet auf die ganze Liste, weil er alle Folgen braucht. Hält ihn das Limit auf, macht er beim nächsten Lauf weiter.
+- **Lernt aus Sperren:** Sperrt Spotify trotzdem, senkt die Box ihre Limits auf 80 % dessen, was bis zur Sperre gefragt wurde (nie unter 3 / 20 / 50).
+- **Nicht mitgezählt** werden die Befehle des Players (Abspielen, Pause, Lautstärke, Stand). Er hält sich nur an eine gemerkte Sperre.
+
+Die Werte stehen in `cache/spotify-limits.json`, die Zählung in `cache/spotify-requests.json`. „Zwischenspeicher leeren“ löscht beide nicht, und Updates behalten sie.

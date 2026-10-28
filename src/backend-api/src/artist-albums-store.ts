@@ -8,9 +8,16 @@
 // A check at most every 6 hours, the whole list every 3 to 5 weeks (each artist on a day of its own: the lists the
 // display asked for together all ran out in the same week and were asked whole one after the other - hundreds of
 // requests for a big library; the check finds the new albums anyway). Written only when the list changed.
+//
+// KN: a whole list is no longer asked in one go (eight big artists opened in the app were well over 100 requests in a
+// few minutes - Spotify blocked the box for 22 hours, 27.10.2026). The display and the app get the first page at once
+// (the newest albums) and the others come page by page as background requests within the box's own limits
+// (spotify-budget.ts) - what is loaded is kept, the next look carries on from there. The Smart-Sync waits for the whole
+// list (it needs every album) and, held back by the limits, tries again at its next run with what is loaded so far.
 
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import { asBackground, currentSpotifyKind, type SpotifyRequestKind } from './spotify-budget'
 
 export interface StoredAlbum {
   id?: string
@@ -27,8 +34,8 @@ export interface AlbumPage {
   next?: string | null
 }
 
-/** One page of the artist's albums from `offset` on (the caller picks how many per page). */
-export type FetchAlbumPage = (offset: number) => Promise<AlbumPage>
+/** One page of the artist's albums from `offset` on (the caller picks how many per page), asked as `kind`. */
+export type FetchAlbumPage = (offset: number, kind: SpotifyRequestKind) => Promise<AlbumPage>
 
 const DIR = path.join(process.cwd(), 'cache', 'artist-albums')
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000
@@ -46,9 +53,14 @@ const PAGE_PAUSE_MS = 400
 interface Kept {
   albums: StoredAlbum[]
   total: number
-  /** when the whole list was asked (ms) */
+  /** when the whole list was asked (ms); 0: no whole list yet (only `progress`) */
   fullAt: number
+  /** KN: a whole list being asked page by page: the pages so far, and the offset of the next one */
+  progress?: { albums: StoredAlbum[]; total: number; next: number; startedAt: number }
 }
+
+// (a list begun longer ago starts over: Spotify's pages may have moved since)
+const PROGRESS_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000
 
 const memory = new Map<string, Kept & { checkedAt: number }>()
 
@@ -108,51 +120,108 @@ function oneAtATime<T>(work: () => Promise<T>): Promise<T> {
   return next
 }
 
-async function wholeList(fetchPage: FetchAlbumPage): Promise<{ albums: StoredAlbum[]; total: number }> {
-  const albums: StoredAlbum[] = []
-  const seen = new Set<string>()
-  let offset = 0
-  let total = 0
-  while (albums.length < MAX_ALBUMS) {
-    const page = await fetchPage(offset)
-    const items = page.items ?? []
-    if (typeof page.total === 'number') total = page.total
-    for (const a of items) {
-      if (a?.id && !seen.has(a.id)) {
-        seen.add(a.id)
-        albums.push(slim(a))
-      }
+// One page more of the whole list being asked: kept with its pages so far (on the card too). True when it is complete.
+async function nextPage(key: string, fetchPage: FetchAlbumPage, kind: SpotifyRequestKind): Promise<boolean> {
+  const kept: Kept = read(key) ?? { albums: [], total: 0, fullAt: 0 }
+  const now = Date.now()
+  const progress =
+    kept.progress && now - kept.progress.startedAt < PROGRESS_MAX_AGE_MS
+      ? kept.progress
+      : { albums: [], total: 0, next: 0, startedAt: now }
+  const page = await fetchPage(progress.next, kind)
+  const items = page.items ?? []
+  const seen = new Set(progress.albums.map((a) => a.id))
+  const albums = [...progress.albums]
+  for (const a of items) {
+    if (a?.id && !seen.has(a.id)) {
+      seen.add(a.id)
+      albums.push(slim(a))
     }
-    // (Spotify's own paging decides - a page it shortened to fewer than asked for still has a next one)
-    if (!page.next || items.length === 0) break
-    offset += items.length
-    // a pause between the pages: a whole list of 30 pages at once is what Spotify answers with a block
-    await new Promise((resolve) => setTimeout(resolve, PAGE_PAUSE_MS))
   }
-  return { albums, total: total || albums.length }
+  const total = typeof page.total === 'number' ? page.total : progress.total
+  // (Spotify's own paging decides - a page it shortened to fewer than asked for still has a next one)
+  const done = !page.next || items.length === 0 || albums.length >= MAX_ALBUMS
+  if (done) {
+    keep(key, { albums, total: total || albums.length, fullAt: now }, true)
+    console.log(`${new Date().toLocaleString()}: [artist-albums] ${key}: whole list asked, ${albums.length} albums`)
+    return true
+  }
+  keep(
+    key,
+    {
+      albums: kept.albums,
+      total: kept.total,
+      fullAt: kept.fullAt,
+      progress: { albums, total, next: progress.next + items.length, startedAt: progress.startedAt },
+    },
+    true,
+  )
+  return false
+}
+
+// The rest of the whole list, page by page as background requests (one artist after the other, see oneAtATime) - done
+// when another one completed it meanwhile.
+function completeInTurn(key: string, fetchPage: FetchAlbumPage): Promise<void> {
+  return oneAtATime(() =>
+    asBackground(async () => {
+      for (;;) {
+        const kept = read(key)
+        if (kept?.fullAt && !kept.progress && Date.now() - kept.fullAt < fullEvery(key)) return
+        if (await nextPage(key, fetchPage, 'background')) return
+        // (a pause between the pages; the gap of the limits comes on top)
+        await new Promise((resolve) => setTimeout(resolve, PAGE_PAUSE_MS))
+      }
+    }),
+  )
+}
+
+// the whole lists the display and the app wait for no longer (each once in the queue)
+const completing = new Set<string>()
+function completeLater(key: string, fetchPage: FetchAlbumPage): void {
+  if (completing.has(key)) return
+  completing.add(key)
+  completeInTurn(key, fetchPage)
+    // (the limits are reached, a block, no network: the next look at the artist carries on)
+    .catch(() => undefined)
+    .finally(() => completing.delete(key))
+}
+
+/** KN: how far the artist's list is when no whole list is kept yet (have of total) - undefined: it is complete. */
+export function artistAlbumsProgress(artistId: string, groups: string): { have: number; total: number } | undefined {
+  const kept = read(keyOf(artistId, groups))
+  if (!kept || kept.fullAt) return undefined
+  return { have: kept.progress?.albums.length ?? 0, total: kept.progress?.total ?? 0 }
 }
 
 /**
  * The artist's albums, newest first: kept, checked with one page, or asked whole (see above).
  * staleOnError: when Spotify cannot be asked (a block, no network), a kept list is handed out instead of the error -
  * the display goes on showing it; the sync wants the error (to stop and wait for a block).
+ * partial (KN): the display and the app - a list not complete yet is handed out as far as it is (the newest albums),
+ * the rest is asked in the background. Without it (the sync) the whole list is waited for.
  */
 export async function artistAlbums(
   artistId: string,
   groups: string,
   fetchPage: FetchAlbumPage,
-  opts: { staleOnError?: boolean } = {},
+  opts: { staleOnError?: boolean; partial?: boolean } = {},
 ): Promise<StoredAlbum[]> {
   const key = keyOf(artistId, groups)
   const busy = running.get(key)
   if (busy) return busy
+  const kind = currentSpotifyKind(opts.partial ? 'tap' : 'background')
   const work = (async () => {
     const kept = read(key)
     const now = Date.now()
-    if (kept && now - kept.checkedAt < CHECK_EVERY_MS) return kept.albums
+    const complete = kept && kept.fullAt > 0
+    const sofar = () => {
+      const k = read(key)
+      return k?.fullAt ? k.albums : (k?.progress?.albums ?? [])
+    }
+    if (complete && now - kept.checkedAt < CHECK_EVERY_MS && !kept.progress) return kept.albums
     try {
-      if (kept && now - kept.fullAt < fullEvery(key)) {
-        const first = await fetchPage(0)
+      if (complete && !kept.progress && now - kept.fullAt < fullEvery(key)) {
+        const first = await fetchPage(0, kind)
         const known = new Set(kept.albums.map((a) => a.id))
         const fresh = (first.items ?? []).filter((a) => a?.id && !known.has(a.id)).map(slim)
         // (against Spotify's own count of last time, not the kept list's length: that one is shorter where Spotify counts
@@ -160,17 +229,27 @@ export async function artistAlbums(
         if (typeof first.total === 'number' && first.total === kept.total + fresh.length) {
           const albums = [...fresh, ...kept.albums]
           keep(key, { albums, total: first.total, fullAt: kept.fullAt }, fresh.length > 0)
-          if (fresh.length) console.log(`${new Date().toLocaleString()}: [artist-albums] ${artistId}: ${fresh.length} new (1 request)`)
+          if (fresh.length)
+            console.log(`${new Date().toLocaleString()}: [artist-albums] ${artistId}: ${fresh.length} new (1 request)`)
           return albums
         }
       }
-      // one whole list after the other (the display asks all its artists at once when it starts)
-      const whole = await oneAtATime(() => wholeList(fetchPage))
-      keep(key, { albums: whole.albums, total: whole.total, fullAt: now }, true)
-      console.log(`${new Date().toLocaleString()}: [artist-albums] ${artistId}: whole list asked, ${whole.albums.length} albums`)
-      return whole.albums
+      if (opts.partial) {
+        // a kept whole list is shown meanwhile; else the first page right away (someone is waiting for it)
+        if (!complete && !(kept?.progress && now - kept.progress.startedAt < PROGRESS_MAX_AGE_MS)) {
+          if (await nextPage(key, fetchPage, kind)) return sofar()
+        }
+        completeLater(key, fetchPage)
+        return sofar()
+      }
+      // the sync: page after page as background requests, carried on at its next run when the limits hold it back
+      await completeInTurn(key, fetchPage)
+      return sofar()
     } catch (err) {
-      if (opts.staleOnError && kept) return kept.albums
+      if (opts.staleOnError || opts.partial) {
+        const list = sofar()
+        if (list.length) return list
+      }
       throw err
     }
   })()

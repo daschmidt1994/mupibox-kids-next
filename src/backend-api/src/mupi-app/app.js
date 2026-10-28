@@ -1969,7 +1969,7 @@ const PILLS = [
 ]
 // items: /api/data; local: category -> folders; nasTop: the selected NAS folders;
 // stack: the opened folders [{ kind: 'artist'|'local'|'nas', title, path }]; level: the entries of the opened folder
-const hear = { items: null, local: {}, nasTop: null, cat: 'all', q: '', stack: [], level: null, levelError: '' }
+const hear = { items: null, local: {}, nasTop: null, cat: 'all', q: '', stack: [], level: null, levelError: '', levelNote: '' }
 
 function hearSkeleton() {
   return [
@@ -2122,6 +2122,7 @@ async function openLevel() {
   const top = hear.stack.at(-1)
   hear.level = null
   hear.levelError = ''
+  hear.levelNote = ''
   drawHear()
   if (!top || top.kind === 'artist') return
   if (top.kind === 'tdartist') {
@@ -2143,6 +2144,10 @@ async function openLevel() {
     if (hear.stack.at(-1) !== top) return
     if (!r.ok) hear.levelError = 'Spotify antwortet gerade nicht.'
     hear.level = r.body?.items ?? []
+    // KN: a big artist's albums come page by page within the box's limits for Spotify requests (the newest first)
+    const loading = r.body?.loading
+    if (loading?.total > hear.level.length)
+      hear.levelNote = `${hear.level.length} von ${loading.total} Alben geladen – die übrigen lädt die Box nach und nach (Schutz vor einer Spotify-Sperre).`
     drawHear()
     return
   }
@@ -2184,6 +2189,7 @@ function drawHear() {
     grid.innerHTML = `<p class="help covers-empty">${esc(err || (hear.q ? 'Nichts gefunden.' : hear.cat === 'nas' ? 'Im Admin-Bereich sind keine NAS-Ordner freigegeben.' : 'Hier ist noch nichts.'))}</p>`
     return
   }
+  const note = top && hear.levelNote ? `<p class="help" style="grid-column:1/-1;margin:0">${esc(hear.levelNote)}</p>` : ''
   grid.innerHTML = hearTiles
     .map(
       (t, i) => `<button class="cover-tile" data-i="${i}" aria-label="${esc(`${t.folder ? 'Öffnen' : 'Abspielen'}: ${t.title}`)}">
@@ -2192,6 +2198,7 @@ function drawHear() {
         <b translate="no">${esc(t.title)}</b>${t.sub ? `<small${t.subIsName ? ' translate="no"' : ''}>${esc(t.sub)}</small>` : ''}</button>`,
     )
     .join('')
+  if (note) grid.insertAdjacentHTML('afterbegin', note)
   for (const img of grid.querySelectorAll('img')) img.addEventListener('error', () => img.remove(), { once: true })
   for (const b of grid.querySelectorAll('.cover-tile')) b.onclick = () => onTile(hearTiles[Number(b.dataset.i)])
 }
@@ -2780,7 +2787,15 @@ async function loadArtistAlbums(item, box) {
   const r = await api(`${SYNC_API}/artist-albums?artistId=${encodeURIComponent(item.artistid)}`)
   if (!box.isConnected) return
   if (!r.ok) {
-    box.innerHTML = `<p class="help">${r.status === 409 ? 'Spotify ist nicht verbunden.' : r.status === 429 ? 'Spotify sperrt die Box gerade – die Alben lassen sich erst danach laden.' : 'Die Alben ließen sich nicht laden.'}</p>`
+    box.innerHTML = `<p class="help">${
+      r.status === 409
+        ? 'Spotify ist nicht verbunden.'
+        : r.status === 429
+          ? r.body?.local
+            ? 'Die Box hat ihr Limit für Spotify-Anfragen erreicht (Schutz vor einer Sperre) – später noch einmal.'
+            : 'Spotify sperrt die Box gerade – die Alben lassen sich erst danach laden.'
+          : 'Die Alben ließen sich nicht laden.'
+    }</p>`
     return
   }
   const albums = r.body?.albums ?? []
@@ -2791,7 +2806,13 @@ async function loadArtistAlbums(item, box) {
   // (the first ten, the others on request: an artist with hundreds of albums would push the sheet's buttons far down)
   const draw = (all) => {
     const shown = all ? albums : albums.slice(0, 10)
-    box.innerHTML = `<p class="help" style="margin:0 0 6px">${esc(`${albums.length} ${albums.length === 1 ? 'Album' : 'Alben'}`)}</p><div class="rows">${shown
+    // (KN: a big artist's list not complete yet - the box loads the rest page by page)
+    const loading = r.body?.loading
+    const count =
+      loading?.total > albums.length
+        ? `${albums.length} von ${loading.total} Alben geladen – die übrigen lädt die Box nach und nach`
+        : `${albums.length} ${albums.length === 1 ? 'Album' : 'Alben'}`
+    box.innerHTML = `<p class="help" style="margin:0 0 6px">${esc(count)}</p><div class="rows">${shown
       .map(
         (al) => `<div class="entry"><span class="lib-thumb">${al.cover ? `<img src="${esc(al.cover)}" alt="" loading="lazy">` : ''}</span>
           <span class="lbl"><b translate="no">${esc(al.name || al.id)}</b>${al.release_date ? `<small>${esc(String(al.release_date).slice(0, 4))}</small>` : ''}</span></div>`,
@@ -4972,7 +4993,7 @@ function spotifyTop() {
     const SYNC_STATUS = {
       IDLE: '–',
       NETWORK_ERROR: 'Keine Verbindung zu Spotify',
-      RATE_LIMITED: 'Spotify bremst gerade – später noch einmal',
+      RATE_LIMITED: /own limit/.test(st.last_sync_reason ?? '') ? 'Limit der Box für Spotify-Anfragen erreicht – geht von selbst weiter' : 'Spotify bremst gerade – später noch einmal',
       AUTH_FAILED: 'Anmeldung bei Spotify fehlgeschlagen',
       AUTH_NEEDS_REAUTH: 'Bitte bei Spotify neu anmelden',
       INTERNAL_ERROR: 'Fehler auf der Box (siehe Protokolle)',
@@ -5239,6 +5260,82 @@ async function loadSyncConfig() {
   state.values.set('prefix', (c.prefix_set && c.playlist_prefix) || state.boxName)
   state.values.set('syncInt', Math.max(5, Math.min(60, Math.round((c.polling_interval_seconds ?? 900) / 60 / 5) * 5)))
   state.values.set('syncOn', !!c.enabled)
+}
+
+// KN: the box's own limits for Spotify requests (spotify-budget.ts) - shown and set on the Sync-Einstellungen
+let spLim = null
+async function loadSpotifyLimits() {
+  const r = await api(`${API}/kn/spotify-limits`)
+  spLim = r.ok ? r.body : null
+  if (!spLim) return
+  state.values.set('spLimWin', spLim.limits.window)
+  state.values.set('spLimHour', spLim.limits.hour)
+  state.values.set('spLimDay', spLim.limits.day)
+}
+
+// (the steps of the sliders, with the value set - lowered after a block by Spotify it is seldom one of them)
+const withValue = (stops, v) => [...new Set([...stops, Number(v)])].filter(Number.isFinite).sort((a, b) => a - b)
+const SP_LIM_STOPS = {
+  spLimWin: [3, 5, 8, 10, 12, 15, 20, 25, 30, 40, 60],
+  spLimHour: [20, 30, 40, 60, 80, 100, 120, 150, 200, 300, 500, 1000],
+  spLimDay: [50, 100, 200, 300, 400, 600, 800, 1000, 1500, 2000, 3000, 5000],
+}
+
+function spotifyLimitsSection() {
+  if (!spLim) return { title: 'Spotify-Anfragen', items: [{ type: 'note', text: 'Die Limits ließen sich nicht laden.' }] }
+  const { used, limits, tapWait, backgroundWait, lastLockout } = spLim
+  const at = (ms) => new Date(ms).toLocaleString(LOCALE, { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+  const status = tapWait
+    ? tapWait.reason.startsWith('Spotify blocks')
+      ? { type: 'warn', text: `Spotify sperrt die Box bis ${at(tapWait.until)}. Bis dahin fragt die Box Spotify nicht – sonst würde die Sperre länger.` }
+      : { type: 'warn', text: `Limit erreicht – neue Listen von Spotify ab ${at(tapWait.until)}. Was schon auf der Box ist, spielt weiter.` }
+    : backgroundWait
+      ? { type: 'note', text: `Anfragen möglich. Smart-Sync und Nachladen machen Pause bis ${at(backgroundWait.until)}.` }
+      : { type: 'note', text: 'Anfragen möglich.' }
+  const rows = [
+    ['Letzte 30 Sekunden', `${used.window} von ${limits.window}`],
+    ['Letzte Stunde', `${used.hour} von ${limits.hour}`],
+    ['Letzte 24 Stunden', `${used.day} von ${limits.day}`],
+  ]
+  if (lastLockout)
+    rows.push([
+      'Letzte Sperre durch Spotify',
+      `${at(lastLockout.at)} – nach ${lastLockout.hour} Anfragen in der Stunde${lastLockout.lowered ? ', Limits danach gesenkt' : ''}`,
+    ])
+  const slider = (key, label) => ({ type: 'slider', key, label, stops: withValue(SP_LIM_STOPS[key], state.values.get(key)) })
+  return {
+    title: 'Spotify-Anfragen',
+    help: 'Die Box zählt ihre Anfragen an Spotify und hört rechtzeitig auf, bevor Spotify sie sperrt. Meist braucht es gar keine: Listen und Cover liegen auf der Box. Große Künstler lädt die Box seitenweise nach. Smart-Sync und Nachladen nutzen höchstens die Hälfte, damit Antippen immer geht. Sperrt Spotify trotzdem, senkt die Box ihre Limits von selbst.',
+    items: [
+      status,
+      { type: 'kv', rows },
+      slider('spLimWin', 'Höchstens in 30 Sekunden'),
+      slider('spLimHour', 'Höchstens pro Stunde'),
+      slider('spLimDay', 'Höchstens pro Tag'),
+      {
+        type: 'buttons',
+        buttons: [
+          ['Limits speichern', 'primary', 'x'],
+          ['Standardwerte', 'ghost', 'x'],
+        ],
+      },
+    ],
+  }
+}
+
+async function saveSpotifyLimits(body) {
+  const r = await api(`${API}/kn/spotify-limits`, { method: 'POST', body })
+  if (!r.ok) return toast(r.body?.error ?? 'Nicht gespeichert', 'info')
+  spLim = r.body
+  for (const [key, k] of [
+    ['spLimWin', 'window'],
+    ['spLimHour', 'hour'],
+    ['spLimDay', 'day'],
+  ])
+    state.values.set(key, spLim.limits[k])
+  toast('Gespeichert')
+  const page = currentPage()
+  if (page?.id === 'syncopt') renderPage(page, false)
 }
 
 function prefixOk(p) {
@@ -10997,14 +11094,24 @@ const CONTROLLERS = {
   },
   spzugang: { load: loadSpotify, top: spotifyAccessTop, sections: () => [], mount: mountSpotifyAccess },
   syncopt: {
-    load: loadSyncConfig,
+    load: () => Promise.all([loadSyncConfig(), loadSpotifyLimits().catch(() => undefined)]),
     // (the prototype said a manual sync stays possible: it does not, see the scheduler)
-    sections: (page) =>
-      page.sections.map((sec) => ({
+    sections: (page) => [
+      ...page.sections.map((sec) => ({
         ...sec,
         items: sec.items.map((it) => (it.key === 'syncOn' ? { ...it, help: 'Aus = gar kein Sync, auch nicht von Hand (Knopf, Telegram /resync). Die Inhalte auf der Box bleiben.' } : it)),
       })),
+      // KN: the box's own limits for Spotify requests
+      spotifyLimitsSection(),
+    ],
     byLabel: {
+      'Limits speichern': () =>
+        saveSpotifyLimits({
+          window: Number(state.values.get('spLimWin')),
+          hour: Number(state.values.get('spLimHour')),
+          day: Number(state.values.get('spLimDay')),
+        }),
+      Standardwerte: () => saveSpotifyLimits({ defaults: true }),
       async Speichern() {
         const prefix = String(state.values.get('prefix') ?? '').trim()
         const minutes = Number(state.values.get('syncInt'))

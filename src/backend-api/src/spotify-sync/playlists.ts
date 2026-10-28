@@ -24,6 +24,8 @@ import type { CategoryType } from './category-types'
 import type { DiscoveredPlaylist, FailedSource, SpotifySyncConfig, SyncItem } from './types'
 import { type AlbumPage, artistAlbums } from '../artist-albums-store'
 import { noteSpotifyBlock, spotifyBlock } from '../spotify-block'
+// KN: the box's own budget for Spotify requests
+import { currentSpotifyKind, SpotifyBudgetError, type SpotifyRequestKind, takeSpotifyRequest } from '../spotify-budget'
 import {
   type CachedAlbum,
   keepAlbum,
@@ -48,7 +50,8 @@ const PLAYLISTS_PAGE_LIMIT = 50
 /** What a 401 / 429 / 5xx / network failure should look like to callers. */
 export type SpotifyApiError =
   | { kind: 'auth'; reason: string }
-  | { kind: 'rate-limit'; reason: string; retryAfterSeconds: number }
+  // (local: held back by the box's own limit, spotify-budget.ts - Spotify itself blocks nothing then)
+  | { kind: 'rate-limit'; reason: string; retryAfterSeconds: number; local?: boolean }
   | { kind: 'network'; reason: string }
   | { kind: 'internal'; reason: string }
 
@@ -81,8 +84,21 @@ function inTurn<T>(send: () => Promise<T>): Promise<T> {
  * Spotify is not asked (each request only keeps it going), and a 429 sets it for the display's lists too.
  * `source`: who a 429 is told to (the block's "told to the sync / the display's lists").
  */
-export async function spotifyGet<T>(path: string, accessToken: string, source: 'sync' | 'display' = 'sync'): Promise<T> {
+export async function spotifyGet<T>(
+  path: string,
+  accessToken: string,
+  source: 'sync' | 'display' = 'sync',
+  kind: SpotifyRequestKind = currentSpotifyKind(source === 'sync' ? 'background' : 'tap'),
+): Promise<T> {
   let response: Response
+  try {
+    // KN: the box's own limits first (spotify-budget.ts) - over them nothing is asked
+    await takeSpotifyRequest(kind, path.replace(/\?.*$/, ''))
+  } catch (err) {
+    if (err instanceof SpotifyBudgetError)
+      throw new SpotifyApiException({ kind: 'rate-limit', reason: `${path} not asked: ${err.why} (the box's own limit)`, retryAfterSeconds: err.retryAfterSeconds, local: true })
+    throw err
+  }
   try {
     response = await inTurn(() => {
       // (in the turn, after the wait: a 429 that came meanwhile holds this request back too)
@@ -595,15 +611,19 @@ export async function fetchArtistAlbums(
   artistId: string,
   accessToken: string,
   albumTypes = 'album',
+  // KN: partial - the app's list: the albums loaded so far, the rest in the background (artist-albums-store.ts)
+  opts: { partial?: boolean } = {},
 ): Promise<SimpleAlbum[]> {
   // Kept on the SD card and afterwards checked with one page (artist-albums-store.ts): the sync every 15 minutes and the
   // app's album list asked Spotify for all ~30 pages of a big artist each time - that ran Spotify apps into blocks.
-  const fetchPage = async (offset: number): Promise<AlbumPage> => {
+  const fetchPage = async (offset: number, kind: SpotifyRequestKind): Promise<AlbumPage> => {
     const limit = artistAlbumsPageLimit
     try {
       const page = await spotifyGet<AlbumPage & { limit?: number }>(
         `/artists/${encodeURIComponent(artistId)}/albums?include_groups=${encodeURIComponent(albumTypes)}&market=DE&limit=${limit}&offset=${offset}`,
         accessToken,
+        opts.partial ? 'display' : 'sync',
+        kind,
       )
       if (typeof page.limit === 'number' && page.limit > 0 && page.limit < limit) artistAlbumsPageLimit = page.limit
       return page
@@ -613,13 +633,13 @@ export async function fetchArtistAlbums(
       if (limit > 10 && err instanceof SpotifyApiException && err.detail.kind === 'internal' && err.detail.reason.startsWith('400')) {
         artistAlbumsPageLimit = 10
         console.warn(`${new Date().toLocaleString()}: [spotify-sync] artist albums: Spotify allows 10 per page for this app (was asked ${limit})`)
-        return fetchPage(offset)
+        return fetchPage(offset, kind)
       }
       throw err
     }
   }
   // (a copy: the callers sort it)
-  return [...(await artistAlbums(artistId, albumTypes, fetchPage))] as SimpleAlbum[]
+  return [...(await artistAlbums(artistId, albumTypes, fetchPage, opts))] as SimpleAlbum[]
 }
 // (see fetchArtistAlbums: albums per page Spotify allows this app)
 let artistAlbumsPageLimit = 50

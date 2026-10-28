@@ -7,6 +7,8 @@ import { SpotifyApi } from '@spotify/web-api-ts-sdk'
 import type { ServerConfig } from '../models/server.model'
 import { artistAlbums } from '../artist-albums-store'
 import { noteSpotifyBlock, spotifyBlock } from '../spotify-block'
+// KN: the box's own budget for Spotify requests (spotify-budget.ts)
+import { currentSpotifyKind, type SpotifyRequestKind, takeSpotifyRequest } from '../spotify-budget'
 import type {
   CachedSpotifyData,
   SpotifyApiAlbumDetails,
@@ -339,13 +341,16 @@ export class SpotifyApiService {
     return spotifyBlock()?.until ?? 0
   }
 
-  private async rateLimitedRequest<T>(operation: () => Promise<T>, attempt = 0): Promise<T> {
+  private async rateLimitedRequest<T>(operation: () => Promise<T>, kind: SpotifyRequestKind = currentSpotifyKind(), attempt = 0): Promise<T> {
     const blockedUntil = this.spotifyBlockedUntil
     if (blockedUntil) {
       throw Object.assign(new Error(`Spotify API blocked (rate limit) until ${new Date(blockedUntil).toLocaleString()}`), {
         statusCode: 429,
       })
     }
+    // KN: counted against the box's own limits first - over them it waits a little or fails here (a SpotifyBudgetError,
+    // statusCode 429 too: the callers fall back to their cached data), without asking Spotify
+    await takeSpotifyRequest(kind, 'of the display')
     // Implement simple rate limiting
     const now = Date.now()
     const timeSinceLastRequest = now - this.lastRequestTime
@@ -364,7 +369,7 @@ export class SpotifyApiService {
         if (retryAfter <= SpotifyApiService.RATE_LIMIT_WAIT_MAX_MS && attempt < 2) {
           console.warn(`Rate limited by Spotify API. Retrying after ${retryAfter}ms`)
           await new Promise((resolve) => setTimeout(resolve, retryAfter))
-          return this.rateLimitedRequest(operation, attempt + 1)
+          return this.rateLimitedRequest(operation, kind, attempt + 1)
         }
         this.rateLimitedUntil = Date.now() + retryAfter
         // (the same block for the Smart-Sync - same Spotify app - and kept over a restart of the server)
@@ -411,6 +416,8 @@ export class SpotifyApiService {
       })
     }
 
+    // (KN: whoever asks first decides whether it counts as a tap or a background request - see spotify-budget.ts)
+    const kind = currentSpotifyKind()
     // Create new request
     return new Promise((resolve, reject) => {
       const subscribers = [{ resolve, reject }]
@@ -420,7 +427,7 @@ export class SpotifyApiService {
         this.requestQueue.push({
           key,
           operation: async () => {
-            const result = await this.rateLimitedRequest(operation)
+            const result = await this.rateLimitedRequest(operation, kind)
             await this.saveToCache(key, result)
             return result
           },
@@ -545,7 +552,7 @@ export class SpotifyApiService {
 
         this.backgroundUpdates.add(key)
 
-        const updatePromise = this.rateLimitedRequest(operation)
+        const updatePromise = this.rateLimitedRequest(operation, 'background')
           .then(async (result) => {
             this.backgroundFailedAt.delete(key)
             await this.saveToCache(key, result)
@@ -710,13 +717,15 @@ export class SpotifyApiService {
     const albums = await artistAlbums(
       artistId,
       albumTypes,
-      async (offset) => {
-        const result = await this.rateLimitedRequest(() =>
-          this.spotifyApi.artists.albums(artistId, albumTypes as any, 'DE', 10 as any, offset),
+      async (offset, kind) => {
+        const result = await this.rateLimitedRequest(
+          () => this.spotifyApi.artists.albums(artistId, albumTypes as any, 'DE', 10 as any, offset),
+          kind,
         )
         return { items: result.items as any, total: result.total, next: result.next }
       },
-      { staleOnError: true },
+      // (KN: the albums loaded so far - the rest come in the background, within the box's limits)
+      { staleOnError: true, partial: true },
     )
     return albums.map((item) => ({
       id: item.id ?? '',

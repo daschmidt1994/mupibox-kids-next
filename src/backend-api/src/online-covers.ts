@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { noteSpotifyBlock, spotifyBlock } from './spotify-block'
+import { takeSpotifyRequest } from './spotify-budget'
 
 /**
  * Covers from the internet for albums (NAS or local folders) that have no picture of their own.
@@ -105,6 +106,12 @@ export async function searchSpotify(q: string, limit = 10): Promise<CoverCandida
   const t = await fetch('http://127.0.0.1:5005/spotify/token', { signal: AbortSignal.timeout(3000) })
   const token = (await t.text()).trim()
   if (!t.ok || !token || token.startsWith('{')) return []
+  // (KN: within the box's own limits, spotify-budget.ts - over them no Spotify covers, the other sources still answer)
+  try {
+    await takeSpotifyRequest('tap', '/search', 5000)
+  } catch {
+    return []
+  }
   // (at most 10 hits per search for Spotify apps under the February 2026 rules - more is refused with 400)
   const r = await fetch(`https://api.spotify.com/v1/search?${new URLSearchParams({ q, type: 'album', limit: String(Math.min(10, limit)), market: 'DE' })}`, {
     headers: { Authorization: `Bearer ${token}` },
