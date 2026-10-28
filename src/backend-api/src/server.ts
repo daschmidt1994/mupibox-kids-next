@@ -526,16 +526,29 @@ app.use(express.urlencoded({ extended: false }))
 // We explicitely check for !== 'development' for now so we do not need to set this env in
 // production.
 if (productionServe) {
-  // KN: the display's start page with the boot screen in it (a data: URL instead of /api/bootscreen/current-splash):
-  // its first picture is the boot screen. Loaded on its own, the picture came 1.8 s after the page - white between the
-  // boot screen and the boot screen again (recorded at boot on Jakob's box).
+  // KN: the display's start page with the boot screen in it: its first picture is the boot screen. Loaded on its own
+  // (/api/bootscreen/current-splash), the picture came 1.8 s after the page, grey and white in between; as a CSS
+  // background (a data: URL) it was still decoded after the first pictures of the page at boot (recorded on Jakob's
+  // box). An <img> decoded with the page (decoding="sync") over the boot screen's colour is there from the start.
   app.get(['/', '/index.html', '/home'], (_req, res, next) => {
     try {
       const html = fs.readFileSync(path.join(serverDir, 'www', 'index.html'), 'utf8')
-      const png = fs.readFileSync(currentSplashFile())
+      const png = fs.readFileSync(currentSplashFile()).toString('base64')
+      let color = '44afe2'
+      try {
+        const c = fs.readFileSync('/home/dietpi/MuPiBox/sysmedia/images/bootscreen/color', 'utf8').trim().replace(/^#/, '')
+        if (/^[0-9a-f]{6}$/i.test(c)) color = c
+      } catch {
+        // the default's colour
+      }
       res.setHeader('Cache-Control', 'no-store')
       res.type('html').send(
-        html.replaceAll("url('/api/bootscreen/current-splash')", `url('data:image/png;base64,${png.toString('base64')}')`),
+        html
+          .replaceAll("url('/api/bootscreen/current-splash')", 'none')
+          .replace(
+            '<div id="mupi-boot"></div>',
+            `<div id="mupi-boot" style="background-color:#${color}"><img src="data:image/png;base64,${png}" decoding="sync" alt="" style="width:100%;height:100%;object-fit:cover;display:block"></div>`,
+          ),
       )
     } catch {
       next()

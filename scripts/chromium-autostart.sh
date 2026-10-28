@@ -148,6 +148,21 @@ FP_CHROMIUM=$(command -v chromium-browser)
 STARTX='xinit'
 [ "$USER" = 'root' ] || STARTX='startx'
 
+# KN: X taking the console repainted it over the boot screen (blue blocks for the 4-5 s until X was ready, recorded at
+# boot on Jakob's box). Once X has it, the console no longer draws: the boot screen is drawn again then and stays
+# until X paints its own background (kiosk_start.sh puts the boot screen there too).
+(
+	i=0
+	while [ "$i" -lt 50 ] && ! pgrep -x Xorg > /dev/null; do
+		sleep 0.1
+		i=$((i + 1))
+	done
+	for wait in 0.4 0.8; do
+		sleep "${wait}"
+		[ -f "${BOOT_PIC}" ] && /usr/bin/fbv -c -y "${BOOT_PIC}" > /dev/null 2>&1
+	done
+) &
+
 #sudo nice -n -19 sudo -u dietpi xinit "$FP_CHROMIUM" $CHROMIUM_OPTS --homepage "${URL:-http://MuPiBox:8200}" -- -nocursor tty2 &
 # kiosk_start.sh shows the boot screen again once X runs, then starts Chromium. -background none: X leaves the screen
 # as it is (the boot screen) instead of painting it black first. vt1: the console the boot screen is on - on tty2 the
