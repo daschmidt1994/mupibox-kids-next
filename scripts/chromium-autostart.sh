@@ -53,7 +53,11 @@
 		waited=$((waited + 10))
 	done
 ) >/dev/null 2>&1 &
-clear
+# KN: no "clear" - it painted tty1 over the boot screen (blue for seconds before the display came). The boot screen is
+# drawn once more instead: the login's lines (written blue on blue, but as blocks over the picture) are gone with it.
+BOOT_PIC="/home/dietpi/MuPiBox/sysmedia/images/bootscreen/splash-$(cat /home/dietpi/MuPiBox/sysmedia/images/bootscreen/current 2>/dev/null).png"
+[ -f "${BOOT_PIC}" ] || BOOT_PIC="/home/dietpi/MuPiBox/sysmedia/bootscreens/prerendered/en/splash-karte.png"
+[ -f "${BOOT_PIC}" ] && /usr/bin/fbv -c -y "${BOOT_PIC}" >/dev/null 2>&1 &
 /usr/local/bin/mupibox/./startup.sh &
 
 rm ~/.config/chromium/Singleton*

@@ -526,6 +526,21 @@ app.use(express.urlencoded({ extended: false }))
 // We explicitely check for !== 'development' for now so we do not need to set this env in
 // production.
 if (productionServe) {
+  // KN: the display's start page with the boot screen in it (a data: URL instead of /api/bootscreen/current-splash):
+  // its first picture is the boot screen. Loaded on its own, the picture came 1.8 s after the page - white between the
+  // boot screen and the boot screen again (recorded at boot on Jakob's box).
+  app.get(['/', '/index.html', '/home'], (_req, res, next) => {
+    try {
+      const html = fs.readFileSync(path.join(serverDir, 'www', 'index.html'), 'utf8')
+      const png = fs.readFileSync(currentSplashFile())
+      res.setHeader('Cache-Control', 'no-store')
+      res.type('html').send(
+        html.replaceAll("url('/api/bootscreen/current-splash')", `url('data:image/png;base64,${png.toString('base64')}')`),
+      )
+    } catch {
+      next()
+    }
+  })
   // Static path to compiled Angular app
   app.use(express.static(path.join(serverDir, 'www')))
 }
@@ -1732,7 +1747,7 @@ app.get('/api/data', (_req, res) => {
 
 // The boot screen of this start (bootscreen_update.sh / splash_screen.sh, with the box name): the display shows it
 // until its start page is ready (index.html), so there is no black and white between boot screen and display.
-app.get('/api/bootscreen/current-splash', (_req, res) => {
+function currentSplashFile(): string {
   const dir = '/home/dietpi/MuPiBox/sysmedia/images/bootscreen'
   let scene = ''
   try {
@@ -1740,7 +1755,12 @@ app.get('/api/bootscreen/current-splash', (_req, res) => {
   } catch {
     // none yet
   }
-  const file = /^[a-z0-9-]+$/.test(scene) ? `${dir}/splash-${scene}.png` : '/home/dietpi/MuPiBox/sysmedia/bootscreens/prerendered/en/splash-karte.png'
+  const file = `${dir}/splash-${scene}.png`
+  return /^[a-z0-9-]+$/.test(scene) && fs.existsSync(file) ? file : '/home/dietpi/MuPiBox/sysmedia/bootscreens/prerendered/en/splash-karte.png'
+}
+
+app.get('/api/bootscreen/current-splash', (_req, res) => {
+  const file = currentSplashFile()
   res.setHeader('Cache-Control', 'no-store')
   res.sendFile(file, (err) => {
     if (err && !res.headersSent) res.status(404).end()

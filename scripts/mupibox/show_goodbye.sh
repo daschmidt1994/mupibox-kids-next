@@ -42,6 +42,10 @@ echo "${PIC}" > ${SHOWN} 2>/dev/null
 	printf '\033[0m\033[H\033[2J\033[3J'
 } >/dev/tty1 2>/dev/null
 
+# KN: the picture as the X server's background first: with the window hidden (and when Chromium is ended), X paints its
+# background - it was black, 0.7 s between the display and the goodbye picture and once more when Chromium ended
+# (recorded on Jakob's box). With the picture there, X paints the picture itself.
+DISPLAY=:0 XAUTHORITY=/home/dietpi/.Xauthority /usr/bin/feh --no-fehbg --bg-fill "${PIC}" >/dev/null 2>&1
 # hide the display's window (it keeps running until mupi_shutdown.sh ends it)
 DISPLAY=:0 XAUTHORITY=/home/dietpi/.Xauthority /usr/bin/xdotool search --onlyvisible --class chromium windowunmap %@ >/dev/null 2>&1
 sleep 0.15
