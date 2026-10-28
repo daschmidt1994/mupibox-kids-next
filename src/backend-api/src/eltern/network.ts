@@ -1,13 +1,14 @@
-// Network options of the app (the admin interface's network.php and admin.php): onboard WiFi at boot, USB WiFi
-// drivers and their power saving, DHCP timeout, WiFi watchdog, "best connection", restarting WiFi, renewing DHCP
-// (WiFi or LAN), control by IP. The LAN itself (on/off, DHCP/static) has its routes in server.ts (/api/network/ethernet*),
-// the onboard radio's quick switch too (/api/network/onboard-wifi). The driver scripts are loaded from the official
-// repository each time (as the admin interface and the updates do): they fetch the drivers from the internet anyway,
-// and stay current without a new version of the box.
+// Network options of the app (the admin interface's network.php and admin.php): onboard WiFi at boot, DHCP timeout,
+// WiFi watchdog, "best connection", restarting WiFi, renewing DHCP (WiFi or LAN), control by IP. The LAN itself
+// (on/off, DHCP/static) has its routes in server.ts (/api/network/ethernet*), the onboard radio's quick switch too
+// (/api/network/onboard-wifi).
+//
+// KN: no USB WiFi drivers to build any more (the original's RTL88X2BU/RTL8821AU installers, out-of-tree drivers from
+// 2021 that do not build on Debian 13): the kernel has them (rtw88_8822bu, rtw88_8821au …). The page shows the adapter
+// and its driver; mupi_wifi_select.sh prefers it to the onboard WiFi.
 
 import { execFile, spawn } from 'node:child_process'
 import { promises as fsp } from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import type { Router } from 'express'
 import type { MupiboxConfig } from '../models/mupibox-config.model'
@@ -31,14 +32,6 @@ function detached(script: string): void {
   child.unref()
 }
 
-// KN: the driver scripts of the installed version, on the box (kidsnext/installer/base.sh)
-const DRIVER_SCRIPTS = '/opt/mupibox-kn/app/upstream/online'
-const DRIVERS: Record<string, { label: string; module: string; path: string; script: string }> = {
-  RTL88X2BU: { label: 'RTL88X2BU', module: '88x2bu', path: '/home/dietpi/.driver/network/88x2bu-20210702', script: 'rtl88x2bu' },
-  RTL8821AU: { label: 'RTL8821AU', module: '8821au', path: '/home/dietpi/.driver/network/8821au-20210708', script: 'rtl8821au' },
-}
-const driverJobs: Record<string, { running: boolean; ok?: boolean; action?: string; headersMissing?: boolean }> = {}
-
 async function exists(p: string): Promise<boolean> {
   return (await run('sudo', ['test', '-e', p], 5000)).ok
 }
@@ -46,9 +39,11 @@ const ONBOARD_SCRIPT = '/usr/local/bin/mupibox/mupi_onboard_wifi.sh'
 const enabled = async (unit: string) => (await run('systemctl', ['is-enabled', unit], 5000)).stdout.trim() === 'enabled'
 const wifiIface = async () => (await run('/usr/local/bin/mupibox/mupi_wifi_iface.sh', [], 5000)).stdout.trim() || 'wlan0'
 
-async function powerLevel(module: string): Promise<string | null> {
-  const text = await fsp.readFile(`/etc/modprobe.d/${module}.conf`, 'utf8').catch(() => '')
-  return new RegExp(`^options\\s+${module}\\b[^\\n]*\\brtw_power_mgnt=(\\d)`, 'm').exec(text)?.[1] ?? null
+/** the kernel driver of a network interface (rtw88_8822bu, brcmfmac …), null without one */
+async function driverOf(iface: string): Promise<string | null> {
+  if (!/^[a-z0-9]+$/.test(iface)) return null
+  const target = await fsp.readlink(`/sys/class/net/${iface}/device/driver`).catch(() => '')
+  return target ? path.basename(target) : null
 }
 
 export function registerNetworkRoutes(router: Router, deps: NetworkDeps): void {
@@ -57,18 +52,16 @@ export function registerNetworkRoutes(router: Router, deps: NetworkDeps): void {
     const dhclient = await fsp.readFile('/etc/dhcp/dhclient.conf', 'utf8').catch(() => '')
     const radio = (await run(ONBOARD_SCRIPT, ['status'], 5000)).stdout.trim() // on | off | unavailable
     const bootDisabled = /^dtoverlay=disable-wifi\s*$/m.test(configTxt)
-    const drivers = await Promise.all(
-      Object.entries(DRIVERS).map(async ([id, d]) => ({ id, label: d.label, installed: await exists(d.path), power: await powerLevel(d.module), job: driverJobs[id] ?? { running: false } })),
-    )
+    const usbIface = (await run('/usr/local/bin/mupibox/mupi_wifi_iface.sh', ['usb'], 5000)).stdout.trim()
     res.json({
       // the onboard WiFi: on only when the chip is on at the start and its radio is on
       onboard: !bootDisabled && radio === 'on',
       onboardBootDisabled: bootDisabled,
       onboardRadio: radio,
       onboardIface: (await run('/usr/local/bin/mupibox/mupi_wifi_iface.sh', ['onboard'], 5000)).stdout.trim(),
-      usbIface: (await run('/usr/local/bin/mupibox/mupi_wifi_iface.sh', ['usb'], 5000)).stdout.trim(),
+      usbIface,
+      usbDriver: usbIface ? await driverOf(usbIface) : null,
       wifiIface: await wifiIface(),
-      drivers,
       dhcpTimeout: /^timeout 10;/m.test(dhclient),
       wifiMonitor: await enabled('dietpi-wifi-monitor'),
       bestConnection: await enabled('mupi_autoconnect-wifi'),
@@ -117,67 +110,6 @@ export function registerNetworkRoutes(router: Router, deps: NetworkDeps): void {
         return
     }
     res.status(r.ok ? 200 : 500).json({ ok: r.ok, rebootNeeded })
-  })
-
-  /** POST /api/app/usb-wifi-power {driver, level} - power saving of a USB WiFi driver (0 off, 1 minimal, 2 max). */
-  router.post('/usb-wifi-power', requireSession, requireCsrf, async (req, res) => {
-    const { driver, level } = (req.body ?? {}) as { driver?: unknown; level?: unknown }
-    const d = Object.hasOwn(DRIVERS, String(driver)) ? DRIVERS[String(driver)] : undefined
-    if (!d || !['0', '1', '2'].includes(String(level))) {
-      res.status(400).json({ error: 'invalid driver or level' })
-      return
-    }
-    const conf = `/etc/modprobe.d/${d.module}.conf`
-    const text = await fsp.readFile(conf, 'utf8').catch(() => '')
-    const lines = text.split('\n').filter((l, i, all) => l !== '' || i < all.length - 1)
-    const idx = lines.findIndex((l) => new RegExp(`^options\\s+${d.module}\\b`).test(l))
-    if (idx < 0) lines.push(`options ${d.module} rtw_power_mgnt=${level}`)
-    else if (/\brtw_power_mgnt=\d+/.test(lines[idx])) lines[idx] = lines[idx].replace(/\brtw_power_mgnt=\d+/, `rtw_power_mgnt=${level}`)
-    else lines[idx] = `${lines[idx]} rtw_power_mgnt=${level}`
-    const tmp = `/tmp/.mupibox-modprobe-${process.pid}.conf`
-    await fsp.writeFile(tmp, `${lines.join('\n')}\n`)
-    const r = await run('sudo', ['install', '-m', '644', '-o', 'root', '-g', 'root', tmp, conf])
-    await fsp.unlink(tmp).catch(() => undefined)
-    res.status(r.ok ? 200 : 500).json({ ok: r.ok, rebootNeeded: true })
-  })
-
-  /**
-   * POST /api/app/usb-wifi-driver {driver, action: install|remove} - builds or removes the driver (minutes: kernel
-   * headers, compiling), in the background; GET /network-options shows the job.
-   */
-  router.post('/usb-wifi-driver', requireSession, requireCsrf, async (req, res) => {
-    const { driver, action } = (req.body ?? {}) as { driver?: unknown; action?: unknown }
-    const d = Object.hasOwn(DRIVERS, String(driver)) ? DRIVERS[String(driver)] : undefined
-    if (!d || (action !== 'install' && action !== 'remove')) {
-      res.status(400).json({ error: 'invalid driver or action' })
-      return
-    }
-    if (Object.values(driverJobs).some((j) => j.running)) {
-      res.status(409).json({ error: 'a driver job is running' })
-      return
-    }
-    // the script of the installed version (a shell script, else it is not run)
-    const text = await fsp.readFile(`${DRIVER_SCRIPTS}/${action}_${d.script}.sh`, 'utf8').catch(() => '')
-    if (!text.startsWith('#!/bin/bash')) {
-      res.status(502).json({ error: 'driver script missing' })
-      return
-    }
-    const script = path.join(os.tmpdir(), `mupibox-driver-${action}-${d.script}.sh`)
-    await fsp.writeFile(script, text.split('\r').join(''), { mode: 0o644 })
-    const job: { running: boolean; ok?: boolean; action?: string; headersMissing?: boolean } = { running: true, action: action as string }
-    driverJobs[String(driver)] = job
-    await run('sudo', ['rm', '-f', '/tmp/driver-install.txt'], 5000)
-    // as the admin interface: run by dietpi, from its home
-    const child = spawn('sudo', ['su', 'dietpi', '-c', `cd && bash '${script}'`], { stdio: 'ignore' })
-    child.on('error', () => Object.assign(job, { running: false, ok: false }))
-    child.on('exit', async (code) => {
-      // the install script leaves this file when the kernel headers are missing
-      const headersMissing = action === 'install' && (await exists('/tmp/driver-install.txt'))
-      Object.assign(job, { running: false, ok: code === 0 && !headersMissing, headersMissing })
-      // the install script ends the display (chromium) and shows the maintenance screen
-      if (action === 'install') detached('sudo -i -u dietpi /usr/local/bin/mupibox/restart_kiosk.sh')
-    })
-    res.json({ ok: true, started: true })
   })
 
   /** POST /api/app/wifi/restart and /dhcp/renew - as the admin interface (the WiFi is gone for a moment). */

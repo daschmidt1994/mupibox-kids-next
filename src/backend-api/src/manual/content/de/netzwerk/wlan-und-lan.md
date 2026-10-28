@@ -41,7 +41,7 @@ Für jedes gespeicherte Netz lässt sich über **Adresse** eine **feste IP-Adres
 
 ### WLAN-Hardware
 
-Das eingebaute WLAN lässt sich ausschalten (**Onboard-WLAN an**). Wieder einschalten geht auch am Display: auf der WLAN-Seite oben das WLAN-Symbol antippen. War es schon beim Start aus, ist es nach einem Neustart wieder da – das Display bietet ihn an. Für einen **USB-WLAN-Stick** wählst du den **USB-WLAN-Treiber** (RTL88X2BU oder RTL8821AU) und tippst auf **Treiber installieren**. Der Treiber wird auf der Box gebaut, das dauert einige Minuten. Danach startest du die Box neu. Ist der Treiber installiert, stellst du **Stromsparen des USB-Adapters** ein (**Aus**, **Minimal** oder **Maximal**). **Aus** macht die Verbindung bei manchen Adaptern stabiler.
+Das eingebaute WLAN lässt sich ausschalten (**Onboard-WLAN an**). Wieder einschalten geht auch am Display: auf der WLAN-Seite oben das WLAN-Symbol antippen. War es schon beim Start aus, ist es nach einem Neustart wieder da – das Display bietet ihn an. Einen **USB-WLAN-Stick** steckst du einfach ein: Gängige Sticks (z. B. TP-Link Archer T3U) laufen mit dem Treiber, der schon im System ist. Die Seite zeigt den erkannten Stick und seinen Treiber. Ist ein Stick da, nimmt die Box ihn. Das eingebaute WLAN springt nur ein, wenn der Stick fehlt oder keine Verbindung bekommt.
 
 ## LAN (Kabel)
 

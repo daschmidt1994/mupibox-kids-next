@@ -9424,15 +9424,13 @@ function rebootHint(text) {
 
 /* Netzwerk-Optionen */
 
-const nopt = { opts: null, lan: null, drv: 'RTL88X2BU' }
-const POWER_LABEL = { 0: 'Aus', 1: 'Minimal', 2: 'Maximal' }
+const nopt = { opts: null, lan: null }
 const LAN_FIELDS = [
   ['lanIp', 'ip', 'IP-Adresse', 'z. B. 192.168.1.50'],
   ['lanMask', 'mask', 'Netzmaske', '255.255.255.0'],
   ['lanGw', 'gateway', 'Router (optional)', 'leer = PC direkt am Kabel'],
   ['lanDns', 'dns', 'DNS-Server (optional)', 'leer = der Router'],
 ]
-const netDriver = () => nopt.opts?.drivers?.find((d) => d.id === nopt.drv)
 
 async function loadNetOptions() {
   const [r, lan] = await Promise.all([api(`${API}/network-options`), api('/api/network/ethernet')])
@@ -9444,8 +9442,6 @@ async function loadNetOptions() {
   v.set('dhcpTo', r.body.dhcpTimeout)
   v.set('wMon', r.body.wifiMonitor)
   v.set('wBest', r.body.bestConnection)
-  v.set('usbDrv', nopt.drv)
-  v.set('usbPm', POWER_LABEL[netDriver()?.power] ?? 'Standard')
   if (nopt.lan) {
     // (the switch as it is set, not whether a cable has a link: without a cable it read "off" although nothing was
     // switched off - the cable has a line of its own on the page)
@@ -9457,8 +9453,6 @@ async function loadNetOptions() {
 
 function wlanNetSections() {
   const o = nopt.opts
-  const d = netDriver()
-  const job = d?.job ?? {}
   const onboardHelp = o.onboardBootDisabled
     ? 'Im Moment ganz abgeschaltet – Einschalten gilt nach einem Neustart der Box.'
     : o.onboardRadio === 'unavailable'
@@ -9466,21 +9460,16 @@ function wlanNetSections() {
       : o.onboardIface && o.onboardIface === o.wifiIface
         ? 'Die Box ist gerade darüber verbunden.'
         : 'Das eingebaute WLAN des Raspberry Pi. Ein USB-WLAN-Adapter bleibt davon unberührt.'
-  const driverState = job.running
-    ? `Wird gerade ${job.action === 'remove' ? 'entfernt' : 'installiert'} – das dauert einige Minuten.`
-    : d?.installed
-      ? `Installiert${o.usbIface ? ` · Adapter ${o.usbIface} erkannt` : ''}`
-      : 'Nicht installiert'
+  // KN: the USB adapter's driver comes with the system (no driver to build as in the original); the box prefers the
+  // adapter and takes the onboard WiFi only without it (mupi_wifi_select.sh)
+  const usbHelp = o.usbIface
+    ? 'Wird bevorzugt. Das eingebaute WLAN springt nur ein, wenn der Stick fehlt oder keine Verbindung bekommt.'
+    : 'Gängige Sticks (z. B. TP-Link Archer T3U) laufen ohne eigenen Treiber – einstecken genügt.'
   const hardware = [
     { type: 'toggle', label: 'Onboard-WLAN an', key: 'wOnboard', help: onboardHelp },
-    { type: 'select', label: 'USB-WLAN-Treiber', key: 'usbDrv', options: (o.drivers ?? []).map((x) => x.id), help: driverState },
+    { type: 'kv', rows: [['USB-WLAN-Stick', o.usbIface ? `${o.usbIface}${o.usbDriver ? ` · Treiber ${o.usbDriver}` : ''}` : 'keiner erkannt']] },
+    { type: 'note', text: usbHelp },
   ]
-  if (job.headersMissing) hardware.push({ type: 'warn', text: 'Die Kernel-Header fehlen, der Treiber ließ sich nicht bauen. In /boot/config.txt muss arm_64bit zum System passen.' })
-  else if (job.ok === false && !job.running) hardware.push({ type: 'warn', text: 'Das hat nicht geklappt – Details unter System › Protokolle.' })
-  if (!job.running) hardware.push({ type: 'buttons', buttons: [[d?.installed ? 'Treiber entfernen' : 'Treiber installieren', d?.installed ? 'danger' : 'ghost', 'driver']] })
-  if (d?.installed) {
-    hardware.push({ type: 'select', label: 'Stromsparen des USB-Adapters', key: 'usbPm', options: ['Aus', 'Minimal', 'Maximal'], help: 'Aus = stabilere Verbindung bei manchen Adaptern. Gilt nach einem Neustart.' })
-  }
   return [
     {
       title: 'WLAN-Wächter',
@@ -9527,21 +9516,6 @@ function lanSections() {
   return sections
 }
 
-// while a driver is built or removed: its state every 5 s, the page again when it is done
-function pollDriverJob(page) {
-  stopPageTimers()
-  every(5000, async () => {
-    const r = await api(`${API}/network-options`)
-    if (!r.ok || r.body.drivers.some((x) => x.job.running)) return
-    stopPageTimers()
-    const job = r.body.drivers.find((x) => x.id === nopt.drv)?.job ?? {}
-    if (currentPage()?.id !== page.id) return
-    await loadNetOptions().catch(() => undefined)
-    renderPage(page, false)
-    if (job.ok) offerReboot(`Treiber ${job.action === 'remove' ? 'entfernt' : 'installiert'}. Das gilt erst nach einem Neustart der Box.`)
-  })
-}
-
 const NET_OPTION = { wOnboard: 'onboard', dhcpTo: 'dhcpTimeout', wMon: 'wifiMonitor', wBest: 'bestConnection' }
 
 async function changeNetOption(key, v, page) {
@@ -9549,18 +9523,8 @@ async function changeNetOption(key, v, page) {
     await loadNetOptions().catch(() => undefined)
     renderPage(page, false)
   }
-  if (key === 'usbDrv') {
-    nopt.drv = v
-    state.values.set('usbPm', POWER_LABEL[netDriver()?.power] ?? 'Standard')
-    return renderPage(page, false)
-  }
   if (key === 'lanMode') return renderPage(page, false)
   if (key.startsWith('lan') && key !== 'lanOn') return // saved with "Speichern"
-  if (key === 'usbPm') {
-    const level = Object.keys(POWER_LABEL).find((k) => POWER_LABEL[k] === v)
-    const r = await api(`${API}/usb-wifi-power`, { method: 'POST', body: { driver: nopt.drv, level } })
-    return r.ok ? rebootHint('Gespeichert.') : toast('Nicht gespeichert', 'info')
-  }
   if (key === 'lanOn') {
     const text = 'Der Anschluss bleibt aus, auch nach einem Neustart, bis er hier wieder eingeschaltet wird. Die Box ist dann nur noch über WLAN erreichbar.'
     if (!v && !(await ask('LAN ausschalten?', text, 'Ausschalten'))) return back()
@@ -9625,22 +9589,6 @@ const netOptionsCtrl = {
   load: loadNetOptions,
   change: changeNetOption,
   act: {
-    async driver(_arg, _label, page) {
-      const d = netDriver()
-      const install = !d.installed
-      const ok = await ask(
-        install ? `Treiber ${d.label} installieren?` : `Treiber ${d.label} entfernen?`,
-        install
-          ? 'Der Treiber wird auf der Box gebaut. Das dauert einige Minuten, so lange zeigt die Box eine Wartungsanzeige. Danach die Box neu starten.'
-          : 'Ein USB-WLAN-Adapter mit diesem Chip funktioniert danach nicht mehr.',
-        install ? 'Installieren' : 'Entfernen',
-      )
-      if (!ok) return
-      const r = await api(`${API}/usb-wifi-driver`, { method: 'POST', body: { driver: d.id, action: install ? 'install' : 'remove' } })
-      if (!r.ok) return toast(r.status === 409 ? 'Es läuft schon eine Treiber-Installation' : 'Das hat nicht geklappt', 'info')
-      d.job = { running: true, action: install ? 'install' : 'remove' }
-      renderPage(page, false)
-    },
     async wifirestart() {
       if (!(await ask('WLAN neu starten?', 'Die Verbindung ist für einen Moment weg, die App meldet sich danach von selbst wieder.', 'Neu starten'))) return
       const r = await api(`${API}/wifi/restart`, { method: 'POST' })
@@ -9664,7 +9612,6 @@ const wlanCtrl = {
   sections: () => (nopt.opts ? wlanNetSections() : []),
   mount(root, page) {
     mountWlan(root, page)
-    if (nopt.opts?.drivers?.some((x) => x.job.running)) pollDriverJob(page)
   },
   change: changeNetOption,
   act: netOptionsCtrl.act,

@@ -3284,33 +3284,6 @@
        "label": "Onboard-WLAN an",
        "key": "wOnboard",
        "default": true
-      },
-      {
-       "type": "select",
-       "label": "USB-WLAN-Treiber",
-       "key": "usbDrv",
-       "default": "RTL88X2BU",
-       "options": [
-        "RTL88X2BU",
-        "RTL8821AU"
-       ]
-      },
-      {
-       "type": "buttons",
-       "buttons": [
-        [
-         "Treiber installieren",
-         "ghost",
-         "toast:Wird installiert …"
-        ]
-       ]
-      },
-      {
-       "type": "toggle",
-       "label": "Stromsparen des USB-Adapters",
-       "key": "usbPm",
-       "default": false,
-       "help": "Aus = stabilere Verbindung bei manchen Adaptern."
       }
      ]
     }
@@ -6007,16 +5980,6 @@
   },
   {
    "l": "Onboard-WLAN an",
-   "where": "Netzwerk › WLAN",
-   "id": "wlan"
-  },
-  {
-   "l": "USB-WLAN-Treiber",
-   "where": "Netzwerk › WLAN",
-   "id": "wlan"
-  },
-  {
-   "l": "Stromsparen des USB-Adapters",
    "where": "Netzwerk › WLAN",
    "id": "wlan"
   },
