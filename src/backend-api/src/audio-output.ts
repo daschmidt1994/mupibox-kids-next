@@ -15,9 +15,12 @@
  * The box's sound card can drop out of PulseAudio (seen after headphones were let go: only the null sink was left and
  * even ALSA refused to open the card until its driver was bound again). ensureBoxSink() binds the driver anew when the
  * card's sink is missing; startAudioWatch() looks every 20 s whether that is needed while nothing else plays.
+ *
+ * KN: headphones that connect by themselves (switched on, "Automatisch verbinden") take the sound at once, the speaker is
+ * silent; switched off (or out of reach) the sound goes back to the speaker (followBluetooth).
  */
 
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { promises as fsp } from 'node:fs'
 import path from 'node:path'
 import type { Express, RequestHandler } from 'express'
@@ -439,8 +442,79 @@ async function startOutput(): Promise<boolean> {
   return true
 }
 
+/** The box's output without Bluetooth: the card kept (Audio > Soundkarte, more than one card), else the box's card */
+async function boxOutput(): Promise<string | null> {
+  const kept = String(mupibox().audioOutput ?? '')
+  if (kept && (await sinks()).includes(kept)) return kept
+  return await ensureBoxSink()
+}
+
+let follow: { timer?: NodeJS.Timeout; known: Set<string> } | null = null
+
+/**
+ * KN: Bluetooth audio follows the headphones: PulseAudio's events (pactl subscribe) for a new Bluetooth sink - the sound
+ * moves there, not louder than the box was - and for one gone - back to the box. A choice on the display or in the app
+ * (switching) is left alone; the events of one change come in a burst and are looked at once, 1.5 s later.
+ */
+function followBluetooth(): void {
+  if (follow) return
+  follow = { known: new Set() }
+  const state = follow
+  const check = async () => {
+    if (switching) {
+      state.timer = setTimeout(check, 1500)
+      return
+    }
+    const now = (await sinks()).filter((s) => s.startsWith('bluez_'))
+    const added = now.filter((s) => !state.known.has(s))
+    const gone = [...state.known].filter((s) => !now.includes(s))
+    state.known = new Set(now)
+    if (!added.length && !gone.length) return
+    switching = true
+    try {
+      const def = (await pactl('get-default-sink')).stdout.trim()
+      if (added.length) {
+        const sink = added[added.length - 1]
+        const box = def.startsWith('bluez_') ? await boxSink() : def
+        await notLouderThan(sink, box ? await volumeOf(box) : Number.NaN)
+        await moveTo(sink)
+        console.log(`${new Date().toLocaleString()}: [audio-output] Bluetooth ${sinkMac(sink)} connected - plays there`)
+      } else if (!now.length || gone.includes(def) || !def) {
+        const box = await boxOutput()
+        if (box) await moveTo(box)
+        console.log(`${new Date().toLocaleString()}: [audio-output] Bluetooth gone - plays on ${box ?? 'nothing'}`)
+      }
+    } finally {
+      switching = false
+    }
+  }
+  const start = () => {
+    const child = spawn('pactl', ['subscribe'], {
+      env: { ...process.env, LC_ALL: 'C' },
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => {
+      if (!/Event '(new|remove)' on sink #/.test(chunk)) return
+      clearTimeout(state.timer)
+      state.timer = setTimeout(() => void check().catch(() => undefined), 1500)
+    })
+    // (PulseAudio restarted, or not up yet: listened to again)
+    child.on('error', () => undefined)
+    child.on('exit', () => setTimeout(start, 10000).unref())
+  }
+  // the Bluetooth sinks there now are not "new" (the start: startOutput keeps a Bluetooth default as it is)
+  void sinks()
+    .then((list) => {
+      state.known = new Set(list.filter((s) => s.startsWith('bluez_')))
+    })
+    .catch(() => undefined)
+    .finally(start)
+}
+
 /** Every 20 s: no Bluetooth output and the box's card without its sink - the card's driver bound anew (see ensureBoxSink) */
 export function startAudioWatch(): void {
+  followBluetooth()
   let started = false
   let tries = 0
   let missing = 0
