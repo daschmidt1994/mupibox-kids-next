@@ -9752,13 +9752,30 @@ function mountExperts(root, page) {
 
 /* KN: Kids Next - NAS backup and restore (kidsnext/backup, routes in eltern/kn-backup.ts) */
 
-const kb = { status: null, missing: false }
+const kb = { status: null, missing: false, restore: null }
 const KB_DAYS = { daily: 'täglich', Sun: 'wöchentlich (Sonntag)' }
 
 async function loadBackup() {
-  const r = await api(`${API}/kn/backup`)
+  const [r, rs] = await Promise.all([api(`${API}/kn/backup`), api(`${API}/kn/restore/state`).catch(() => null)])
   kb.missing = r.status === 503
   kb.status = r.ok ? r.body : null
+  kb.restore = rs?.ok ? rs.body.report : null
+}
+
+// What the last restore left to do (its report's needs), for two weeks after it
+const KB_NEEDS = {
+  'backup-paused':
+    'Automatisches Backup pausiert: Diese Box ist ein anderes Gerät als die im Backup. Ersetzt sie die alte Box, schalte es unter „Ändern“ wieder ein. Ist sie eine zweite Box, richte das Backup neu ein – mit eigenem Namen, sonst schreibt sie in das Backup der anderen Box.',
+  'netbird-setup-key': 'NetBird ist nicht verbunden: unter Netzwerk › NetBird mit einem neuen Setup-Key verbinden.',
+  'bluetooth-pairing': 'Bluetooth-Kopfhörer und -Lautsprecher bitte neu koppeln (anderer Pi als im Backup).',
+}
+function kbRestoreNotes() {
+  const rep = kb.restore
+  if (!rep?.date || Date.now() - new Date(rep.date).getTime() > 14 * 86400000) return ''
+  const needs = (rep.needs ?? []).filter((n) => KB_NEEDS[n])
+  if (!needs.length) return ''
+  return `<section class="card"><h2>Nach der Wiederherstellung</h2><p class="help">Wiederhergestellt am ${esc(kbWhen(rep.date))} aus dem Backup von „${esc(rep.backup?.box ?? '')}“. Noch zu tun:</p>
+    ${needs.map((n) => `<div class="note warn">${icon('info', 18)}<span>${esc(KB_NEEDS[n])}</span></div>`).join('')}</section>`
 }
 
 const kbWhen = (t) => (t ? new Date(t).toLocaleString(LOCALE, { dateStyle: 'medium', timeStyle: 'short' }) : '–')
@@ -9802,6 +9819,7 @@ function kbNasCard() {
 
 function backupTop() {
   return [
+    kbRestoreNotes(),
     kbNasCard(),
     `<section class="card"><h2>Vom NAS wiederherstellen</h2>
       <p class="help">Holt Einstellungen, Medienliste, Hörspielpositionen, Spotify, WLAN und – soweit möglich – Bluetooth aus einem NAS-Backup zurück. Nach einer neuen SD-Karte: erst die Box automatisch installieren lassen, dann hier wiederherstellen. Die Box startet danach neu.</p>
@@ -10018,12 +10036,18 @@ function openRestoreWizard() {
              <span class="lbl"><b>${esc(kbWhen(x.date))}</b><small>Version ${esc(x.version)}${x.media ? ' · mit Hörspielen' : ''}${x.size ? ` · ${formatBytes(x.size)}` : ''}${x.compatible ? '' : ' · neuer als diese Box, zuerst aktualisieren'}</small></span></label>`,
          )
          .join('')}</div>
-       <div class="row"><span class="lbl"><b>NetBird-Zugang übernehmen</b><small>Nur wenn die alte SD-Karte nicht mehr benutzt wird – sonst später mit neuem Setup-Key verbinden.</small></span><label class="switch"><input type="checkbox" id="kr-netbird" aria-label="NetBird übernehmen"><span></span></label></div>
+       <div class="row"><span class="lbl"><b>NetBird-Zugang übernehmen</b><small>Nur wenn die Box aus dem Backup <b>nie wieder läuft</b> (kaputte SD-Karte). Läuft sie noch – oder ist das hier eine zweite Box –, bleibt das <b>aus</b>: Sonst streiten beide Boxen um denselben Zugang. NetBird lässt sich später mit einem neuen Setup-Key verbinden.</small></span><label class="switch"><input type="checkbox" id="kr-netbird" aria-label="NetBird übernehmen"><span></span></label></div>
        <div class="note warn">${icon('info', 18)}<span>Einstellungen und Bibliothek dieser Box werden durch das Backup ersetzt. Danach startet die Box neu; anmelden dann mit dem Passwort aus dem Backup.</span></div>
        <div class="btns"><button class="btn" id="kr-back">Zurück</button><button class="btn danger" id="kr-go" ${first ? '' : 'disabled'}>Wiederherstellen</button></div>
        <p class="help" id="kr-msg" style="margin:0"></p>`,
       (sheet) => {
         $('#kr-back', sheet).onclick = step1
+        // (taken over by a second box, the first one lost its NetBird: asked once more)
+        $('#kr-netbird', sheet).onchange = (e) => {
+          if (e.target.checked && !confirm(`NetBird-Zugang von „${w.box}“ übernehmen?\n\nNur wenn diese Box nie wieder eingeschaltet wird. Sonst verlieren beide Boxen die Verbindung.`)) {
+            e.target.checked = false
+          }
+        }
         $('#kr-go', sheet).onclick = async () => {
           const snapshot = sheet.querySelector('input[name="kr-snap"]:checked')?.value
           if (!snapshot) return

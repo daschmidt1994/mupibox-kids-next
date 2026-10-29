@@ -286,7 +286,7 @@ cmd_apply() {
 		for f in "${S}${KN_STATE_DIR}"/*; do
 			[ -e "${f}" ] || continue
 			name=$(basename "${f}")
-			case "${name}" in restore-*|installed.json|.backup.lock) continue ;; esac
+			case "${name}" in restore-*|installed.json|.backup.lock|device-id) continue ;; esac
 			put "${KN_STATE_DIR#"${KN_FS}"}/${name}"
 		done
 	fi
@@ -314,6 +314,15 @@ cmd_apply() {
 		chmod 600 "${KN_FS}"/etc/NetworkManager/system-connections/* 2>/dev/null
 	fi
 
+	# Another device than the backup's (its Pi's serial number; a backup from before 0.1.33 has none - then its Bluetooth
+	# address): a test on a second box, or a new Pi for a broken one. yes / no / empty: not known
+	local other="" dev_old dev_here
+	dev_old=$(tr -cd 'A-Za-z0-9-' < "${S}${KN_STATE_DIR}/device-id" 2>/dev/null)
+	dev_here=$(kb_device_id)
+	if [ -n "${dev_old}" ] && [ -n "${dev_here}" ]; then
+		[ "${dev_old}" = "${dev_here}" ] && other=no || other=yes
+	fi
+
 	# Bluetooth: the pairings belong to the box's Bluetooth address; on another Pi the headphones have to be paired again
 	if [ -d "${S}${KN_FS}/var/lib/bluetooth" ]; then
 		local here old
@@ -324,6 +333,9 @@ cmd_apply() {
 			chmod 700 "${KN_FS}/var/lib/bluetooth" "${KN_FS}/var/lib/bluetooth/${here}" 2>/dev/null
 		elif [ -n "${old}" ]; then
 			NEEDS+=("bluetooth-pairing")
+		fi
+		if [ -z "${other}" ] && [ -n "${here}" ] && [ -n "${old}" ]; then
+			[ "${here}" = "${old}" ] && other=no || other=yes
 		fi
 	fi
 
@@ -343,6 +355,14 @@ cmd_apply() {
 		else
 			NEEDS+=("netbird-setup-key")
 		fi
+	fi
+
+	# The automatic backup paused on another device: it would go on as the old box (its name, its key) - a box restored
+	# for a test wrote into the other box's backup at night. On again in the app (a new Pi for a broken one), or the
+	# backup set up anew with a name of its own.
+	if [ "${other}" = yes ] && [ "${ENABLED}" = 1 ]; then
+		ENABLED=0
+		kb_save_conf && NEEDS+=("backup-paused")
 	fi
 
 	# 3. the media, straight into place (they can be big: no second copy on the card)
@@ -403,6 +423,7 @@ cmd_apply() {
 		case "${n}" in
 			bluetooth-pairing) echo "  ! Bluetooth-Kopfhörer bitte neu koppeln (anderer Pi als im Backup)." ;;
 			netbird-setup-key) echo "  ! NetBird bitte in der Eltern-App mit einem neuen Setup-Key verbinden." ;;
+			backup-paused) echo "  ! Automatisches Backup pausiert: anderes Gerät als im Backup. Ersatz für die alte Box: in der Eltern-App wieder einschalten. Sonst neu einrichten." ;;
 		esac
 	done
 	if [ ${#FAILED[@]} -gt 0 ]; then

@@ -126,8 +126,10 @@ Die Box fragt nacheinander:
 ### 7. Backup wiederherstellen
 1. Die Daten werden zurückgespielt. Mit Medien kann das je nach Menge länger dauern.
 2. **NetBird-Frage:**
-   - **Ja** nur, wenn die alte SD-Karte nicht mehr benutzt wird.
-   - Sonst **Nein** und NetBird später mit einem neuen Setup-Key verbinden.
+   - **Ja** nur, wenn die Box aus dem Backup **nie wieder eingeschaltet** wird (kaputte SD-Karte).
+   - Sonst **Nein**, und NetBird später mit einem neuen Setup-Key verbinden. Das gilt vor allem für einen **Test auf einer zweiten Box**: Mit „Ja“ hat sie denselben NetBird-Zugang wie die echte Box, und beide verlieren die Verbindung, sobald sie gleichzeitig laufen.
+
+> **Restore testen auf einer zweiten Box?** Gut so, aber danach die Karte neu flashen. Die Testbox ist eine Kopie der anderen Box, mit demselben Namen, Spotify-Konto und Elternpasswort. Ihr automatisches Backup pausiert die Box von selbst (siehe unten), damit sie nachts nicht in das Backup der echten Box schreibt.
 
 ### 8. Neu starten
 Die Frage „Jetzt neu starten?“ mit **J** beantworten. Nach dem Neustart erscheint die gewohnte Kinderoberfläche mit allen Hörspielen.
@@ -155,8 +157,11 @@ Alle Zeilen sollten ✔ zeigen. Dann kurz selbst nachsehen:
 |---|---|---|
 | „Bluetooth-Kopfhörer bitte neu koppeln“ | Ein anderer Pi hat eine andere Bluetooth-Adresse; die Kopfhörer kennen nur die alte | Kopfhörer in den Kopplungsmodus bringen und in der Eltern-App unter *Bluetooth* koppeln |
 | „NetBird … mit neuem Setup-Key verbinden“ | NetBird-Zugang nicht übernommen | Im NetBird-Dashboard (`netbird.daschmidt.at`) einen Setup-Key erzeugen und in der Eltern-App eintragen |
+| „Automatisches Backup pausiert“ | Die Box läuft auf einem anderen Pi als im Backup (erkannt an der Seriennummer des Pi, bei Backups vor 0.1.33 an der Bluetooth-Adresse) | Ersetzt der neue Pi die alte Box: unter *Backup › Ändern* wieder einschalten. Ist es eine zweite Box: Backup neu einrichten, mit eigenem Namen |
 
-Auch das automatische Backup läuft nach der Wiederherstellung weiter, in denselben Ordner auf dem NAS und mit demselben Schlüssel.
+Die Eltern-App zeigt diese Punkte nach der Wiederherstellung zwei Wochen lang oben auf der Seite *Backup* an.
+
+Auf demselben Pi (nur die SD-Karte ist neu) läuft das automatische Backup nach der Wiederherstellung weiter, in denselben Ordner auf dem NAS und mit demselben Schlüssel.
 
 ### Wenn etwas schiefgeht
 - **„Keine Internetverbindung“:** Kabel prüfen, oder das WLAN in `dietpi.txt`/`dietpi-wifi.txt` prüfen (Schritt 1.3).

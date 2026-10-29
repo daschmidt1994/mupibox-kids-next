@@ -11,6 +11,8 @@
 		exit 0
 	fi
 	export KB_RESTIC="${RESTIC_BIN}" KN_TEST=1
+	# (no device id unless a test sets one: the machine running the tests has its own)
+	export KB_DEVICE_ID=""
 	BOX="${TMP}/box" NAS="${TMP}/nas" VER="${TMP}/VERSION"
 	export KN_FS="${BOX}" KB_VERSION_FILE="${VER}" KB_CACHE_DIR="${TMP}/cache"
 	echo "0.1.0" > "${VER}"
@@ -136,6 +138,20 @@
 	if [ ! -d "${BOX}/var/lib/bluetooth/B8:27:EB:00:00:01" ] && jq -e '.needs | index("bluetooth-pairing")' "${BOX}/var/lib/mupibox-kn/restore-report.json" >/dev/null; then
 		ok "Anderer Pi: Bluetooth nicht übernommen, Kopplung gemeldet"; else nok "Anderer Pi: Bluetooth nicht übernommen, Kopplung gemeldet"; fi
 	if [ -f "${BOX}/var/lib/netbird/config.json" ]; then ok "NetBird übernommen (--netbird yes)"; else nok "NetBird übernommen (--netbird yes)"; fi
+	if jq -e '.needs | index("backup-paused")' "${BOX}/var/lib/mupibox-kn/restore-report.json" >/dev/null && grep -q '^ENABLED=0$' "${BOX}/etc/mupibox-kn/backup.conf"; then
+		ok "Anderer Pi (Bluetooth-Adresse): automatisches Backup pausiert"; else nok "Anderer Pi (Bluetooth-Adresse): automatisches Backup pausiert" "$(cat "${BOX}/etc/mupibox-kn/backup.conf")"; fi
+
+	# the device's serial number in the backup: another one pauses the backup, the same one (a new SD card) does not
+	KB_DEVICE_ID="pi-aaaa" "${BK}" run >/dev/null 2>&1
+	eq "Backup merkt sich das Gerät" "$(cat "${BOX}/var/lib/mupibox-kn/device-id" 2>/dev/null)" "pi-aaaa"
+	printf '%s\n' "${KEY}" | "${RS}" select --type local --share "${NAS}" --box mupibox-jakob --snapshot latest --key-stdin >/dev/null 2>&1
+	KB_DEVICE_ID="pi-aaaa" KR_BT_CONTROLLER="DC:A6:32:00:00:02" "${RS}" apply --netbird no >/dev/null 2>&1
+	if ! jq -e '.needs | index("backup-paused")' "${BOX}/var/lib/mupibox-kn/restore-report.json" >/dev/null && grep -q '^ENABLED=1$' "${BOX}/etc/mupibox-kn/backup.conf"; then
+		ok "Gleiches Gerät (neue SD-Karte): Backup läuft weiter"; else nok "Gleiches Gerät (neue SD-Karte): Backup läuft weiter" "$(cat "${BOX}/etc/mupibox-kn/backup.conf")"; fi
+	printf '%s\n' "${KEY}" | "${RS}" select --type local --share "${NAS}" --box mupibox-jakob --snapshot latest --key-stdin >/dev/null 2>&1
+	KB_DEVICE_ID="pi-bbbb" KR_BT_CONTROLLER="B8:27:EB:00:00:01" "${RS}" apply --netbird no >/dev/null 2>&1
+	if jq -e '.needs | index("backup-paused")' "${BOX}/var/lib/mupibox-kn/restore-report.json" >/dev/null && grep -q '^ENABLED=0$' "${BOX}/etc/mupibox-kn/backup.conf"; then
+		ok "Anderes Gerät (Seriennummer): Backup pausiert"; else nok "Anderes Gerät (Seriennummer): Backup pausiert" "$(cat "${BOX}/etc/mupibox-kn/backup.conf")"; fi
 
 	echo "PASS=${PASS} FAIL=${FAIL}" > "${TMP}/counts"
 )

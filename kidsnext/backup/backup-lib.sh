@@ -265,6 +265,22 @@ kb_kn_version() {
 	if [ -n "${KN_VERSION}" ]; then echo "${KN_VERSION}"; elif [ -f "${KB_VERSION_FILE}" ]; then tr -d '[:space:]' < "${KB_VERSION_FILE}"; else echo "0.0.0"; fi
 }
 
+# The device the box runs on: the Pi's serial number (a new SD card in the same Pi keeps it), else the board's id; empty
+# when there is none. Saved with every backup (device-id) - a restore onto another device is told apart by it.
+kb_device_id() {
+	local id=""
+	if [ -n "${KB_DEVICE_ID+x}" ]; then
+		id="${KB_DEVICE_ID}"
+	elif [ -r /sys/firmware/devicetree/base/serial-number ]; then
+		id=$(tr -d '\0' < /sys/firmware/devicetree/base/serial-number)
+	elif [ -r /sys/class/dmi/id/product_uuid ]; then
+		id=$(cat /sys/class/dmi/id/product_uuid)
+	fi
+	id=$(printf '%s' "${id}" | tr -cd 'A-Za-z0-9-' | tr 'A-Z' 'a-z')
+	# (a serial of zeros only: no real one)
+	[[ "${id}" =~ [1-9a-z] ]] && echo "${id}"
+}
+
 # ---------------------------------------------------------------------------------------------------------------------
 # History: the last 60 runs as JSON for the dashboard (one write per run)
 

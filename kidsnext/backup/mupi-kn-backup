@@ -280,6 +280,10 @@ cmd_run() {
 	kb_restic unlock >/dev/null 2>&1
 
 	stage="backup"
+	# (which device this backup comes from: a restore onto another one pauses the automatic backup, mupi-kn-restore)
+	local device
+	device=$(kb_device_id)
+	[ -n "${device}" ] && echo "${device}" > "${KN_STATE_DIR}/device-id"
 	local paths=() excludes
 	mapfile -t paths < <(kb_config_paths)
 	[ "${INCLUDE_MEDIA}" = 1 ] && mapfile -t -O "${#paths[@]}" paths < <(kb_media_paths)
