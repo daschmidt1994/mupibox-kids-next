@@ -543,7 +543,8 @@ async function displayReady(): Promise<{ ready: boolean; waiting: string[] }> {
   if (!(await hasSink().catch(() => false))) waiting.push('sound')
   const route = await execFileAsync('ip', ['route', 'show', 'default'], { timeout: 3000 }).catch(() => ({ stdout: '' }))
   if (!String(route.stdout).trim()) waiting.push('network')
-  const spotify = (config?.spotify as { refreshToken?: string } | undefined)?.refreshToken
+  // (the Spotify sign-in lies in mupiboxconfig.json - the server's config.json has the app's id only)
+  const spotify = (getMupiboxConfigSync()?.spotify as { refreshToken?: string } | undefined)?.refreshToken
   if (spotify && !device && !waiting.includes('player')) waiting.push('spotify')
   if (waiting.length) return { ready: false, waiting }
   displayReadySeen = true
