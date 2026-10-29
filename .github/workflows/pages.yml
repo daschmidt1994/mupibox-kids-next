@@ -1,0 +1,34 @@
+# KN: the Spotify sign-in page (kidsnext/relay) on GitHub Pages - straight from kids-next, no gh-pages branch any more.
+# Its address stays https://daschmidt1994.github.io/mupibox-kids-next/callback/ (the boxes' Spotify apps name it).
+name: Spotify-Anmeldeseite
+
+on:
+  push:
+    branches: [kids-next]
+    paths: [kidsnext/relay/**, .github/workflows/pages.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: touch kidsnext/relay/.nojekyll
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: kidsnext/relay
+      - id: deployment
+        uses: actions/deploy-pages@v4
