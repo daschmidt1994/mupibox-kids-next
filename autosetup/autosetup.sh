@@ -598,7 +598,11 @@ STEP=0
 	fi
 	/boot/dietpi/dietpi-software install 5 >&3 2>&3
 	/boot/dietpi/func/dietpi-set_hardware bluetooth enable >&3 2>&3
-	/boot/dietpi/func/dietpi-set_hardware soundcard "hifiberry-dac" >&3 2>&3
+	# the sound card chosen for this box (an update ran this too: always "hifiberry-dac" put its driver next to the
+	# MuPiHAT's MAX98357A - both on I2S, the speaker stayed silent); a new box gets the MiniAmp
+	SOUNDCARD=$(/usr/bin/jq -r '.mupibox.physicalDevice // empty' "${CONFIG}" 2>/dev/null)
+	case "${SOUNDCARD}" in "" | *[!A-Za-z0-9\ ._:-]*) SOUNDCARD=hifiberry-dac ;; esac
+	/boot/dietpi/func/dietpi-set_hardware soundcard "${SOUNDCARD}" >&3 2>&3
 	usermod -g pulse -G audio --home /var/run/pulse pulse >&3 2>&3
 	usermod -a -G audio,bluetooth,pulse,pulse-access,gpio,dialout,tty dietpi >&3 2>&3
 	usermod -a -G pulse,pulse-access,gpio root >&3 2>&3
