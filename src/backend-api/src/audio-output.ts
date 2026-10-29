@@ -465,24 +465,33 @@ function followBluetooth(): void {
       state.timer = setTimeout(check, 1500)
       return
     }
-    const now = (await sinks()).filter((s) => s.startsWith('bluez_'))
+    // Only the sound of a paired headphone or speaker (Audio Sink, see outputDevices) in its music profile: a phone
+    // paired with the box brings a Bluetooth sink of its own for calls (handsfree/headset), and the sound went there -
+    // the speaker was silent while Bluetooth was on, with no headphones at all (reported by Daniel)
+    const outMacs = new Set((await outputDevices()).map((d) => d.mac))
+    const wanted = (s: string) =>
+      s.startsWith('bluez_') && !/handsfree|headset|head_unit|audio_gateway|hfp|hsp/i.test(s) && outMacs.has(sinkMac(s) ?? '')
+    const now = (await sinks()).filter(wanted)
     const added = now.filter((s) => !state.known.has(s))
     const gone = [...state.known].filter((s) => !now.includes(s))
     state.known = new Set(now)
-    if (!added.length && !gone.length) return
+    const def = (await pactl('get-default-sink')).stdout.trim()
+    // (PulseAudio may make another Bluetooth sink the default by itself - not one of these: back to the box too)
+    // (no default at all: PulseAudio not there right now - nothing to move)
+    const strayDefault = def.startsWith('bluez_') && !now.includes(def)
+    if (!added.length && !gone.length && !strayDefault) return
     switching = true
     try {
-      const def = (await pactl('get-default-sink')).stdout.trim()
       if (added.length) {
         const sink = added[added.length - 1]
         const box = def.startsWith('bluez_') ? await boxSink() : def
         await notLouderThan(sink, box ? await volumeOf(box) : Number.NaN)
         await moveTo(sink)
         console.log(`${new Date().toLocaleString()}: [audio-output] Bluetooth ${sinkMac(sink)} connected - plays there`)
-      } else if (!now.length || gone.includes(def) || !def) {
+      } else if (strayDefault || !now.length) {
         const box = await boxOutput()
         if (box) await moveTo(box)
-        console.log(`${new Date().toLocaleString()}: [audio-output] Bluetooth gone - plays on ${box ?? 'nothing'}`)
+        console.log(`${new Date().toLocaleString()}: [audio-output] no Bluetooth headphones (default was ${def}) - plays on ${box ?? 'nothing'}`)
       }
     } finally {
       switching = false
@@ -506,7 +515,7 @@ function followBluetooth(): void {
   // the Bluetooth sinks there now are not "new" (the start: startOutput keeps a Bluetooth default as it is)
   void sinks()
     .then((list) => {
-      state.known = new Set(list.filter((s) => s.startsWith('bluez_')))
+      state.known = new Set(list.filter((s) => s.startsWith('bluez_') && !/handsfree|headset|head_unit|audio_gateway|hfp|hsp/i.test(s)))
     })
     .catch(() => undefined)
     .finally(start)
