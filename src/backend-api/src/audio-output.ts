@@ -109,6 +109,11 @@ async function sinks(): Promise<string[]> {
     .filter(Boolean)
 }
 
+/** Whether there is anything to play on: the speaker's sink, another card's or a Bluetooth one (the display's start) */
+export async function hasSink(): Promise<boolean> {
+  return (await sinks()).some((s) => s.startsWith('alsa_output') || s.startsWith('bluez_'))
+}
+
 // What a sink is, read from its name and what PulseAudio says of its card (alsa.card_name, alsa.id): the amplifier
 // first - the MAX98357A's id is "bcm2835-i2s-HiFi HiFi-0", the board's own cards are "bcm2835 Headphones" and "bcm2835
 // HDMI 1" (the same platform device, so the sink's name alone does not tell them apart)

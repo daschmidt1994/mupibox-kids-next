@@ -61,7 +61,7 @@ import { ardFeed, isArdFeed } from './ard-sounds'
 import { isEpisodePick } from './episode-pick'
 import { feedHostKey, feedHostsOf, isPrivateHost, neverFetched } from './lan-feeds'
 import { decodeWpaSsid, parseWpaCliScanResults, type WifiScanEntry, wifiBandOf } from './wpa-ssid'
-import { registerAudioOutputRoutes, startAudioWatch } from './audio-output'
+import { hasSink, registerAudioOutputRoutes, startAudioWatch } from './audio-output'
 import { episodeKey, MAX_KEEP, type OfflineEpisode, PodcastOffline } from './podcast-offline'
 import { setFeedHeadReader } from './podcast-search'
 import { EpisodeState, episodeStateSettings } from './episode-state'
@@ -521,11 +521,83 @@ app.put('/api/home-lists/:category', express.json({ limit: '20mb' }), (req, res)
 app.use(express.json())
 app.use(express.urlencoded({ extended: false }))
 
+// --- whether the box can play yet (the display's start, see /api/display-ready) -----------------------------------------
+
+let displayReadySeen = false
+const displayStartedAt = Date.now()
+
+/**
+ * What the box still waits for: the player (port 5005), a sink to play on, a network, and - with Spotify set up - the
+ * display's Spotify player signed in (it reports its device to the player when it is, spotify-player.service.ts).
+ */
+async function displayReady(): Promise<{ ready: boolean; waiting: string[] }> {
+  if (displayReadySeen) return { ready: true, waiting: [] }
+  const waiting: string[] = []
+  let device: string | null = null
+  try {
+    const r = await fetch('http://127.0.0.1:5005/display/spotify-device', { signal: AbortSignal.timeout(2000) })
+    device = ((await r.json()) as { id?: string | null }).id ?? null
+  } catch {
+    waiting.push('player')
+  }
+  if (!(await hasSink().catch(() => false))) waiting.push('sound')
+  const route = await execFileAsync('ip', ['route', 'show', 'default'], { timeout: 3000 }).catch(() => ({ stdout: '' }))
+  if (!String(route.stdout).trim()) waiting.push('network')
+  const spotify = (config?.spotify as { refreshToken?: string } | undefined)?.refreshToken
+  if (spotify && !device && !waiting.includes('player')) waiting.push('spotify')
+  if (waiting.length) return { ready: false, waiting }
+  displayReadySeen = true
+  console.log(`${new Date().toLocaleString()}: [display] ready to play, ${Math.round((Date.now() - displayStartedAt) / 1000)} s after the server started`)
+  return { ready: true, waiting: [] }
+}
+
+// (in the page's head: the display's start only, as the boot screen's script - not in a preview in a frame)
+const WAKING_HEAD = `<style>
+  mupi-swiper, .km-hbtn, ion-buttons[slot="start"] { transition: filter .6s, opacity .6s; }
+  html.mupi-waking mupi-swiper, html.mupi-waking .km-hbtn, html.mupi-waking ion-buttons[slot="start"] {
+    filter: grayscale(1); opacity: .45; pointer-events: none;
+  }
+  html.mupi-waking body::after {
+    content: ''; position: fixed; left: 50%; bottom: 28px; width: 44px; height: 44px; margin-left: -22px;
+    border: 5px solid rgba(255,255,255,.35); border-top-color: #fff; border-radius: 50%; box-sizing: border-box;
+    animation: mupi-waking-spin 1s linear infinite; z-index: 1000; pointer-events: none;
+  }
+  @keyframes mupi-waking-spin { to { transform: rotate(360deg); } }
+</style>
+<script>
+  (function () {
+    var p = location.pathname
+    if (window.top !== window || !(p === '/' || p === '/home' || p === '/index.html')) return
+    var h = document.documentElement, t0 = Date.now()
+    h.classList.add('mupi-waking')
+    function next(ready) {
+      if (ready || Date.now() - t0 > 90000) h.classList.remove('mupi-waking')
+      else setTimeout(poll, 1000)
+    }
+    function poll() {
+      fetch('/api/display-ready', { cache: 'no-store' })
+        .then(function (r) { return r.json() })
+        .then(function (s) { next(s && s.ready) }, function () { next(false) })
+    }
+    poll()
+  })()
+</script>
+`
+
 // We only want to serve the Angular app as static files in production so that we can start
 // the Angular development server during development to be able to hot-reload and debug.
 // We explicitely check for !== 'development' for now so we do not need to set this env in
 // production.
 if (productionServe) {
+  // KN: after the start the tiles are grey and cannot be touched until the box can play (Daniel: the children see when
+  // it is ready - a tile touched too early played nothing). The page asks /api/display-ready every second; after 90 s
+  // it lets go anyway (Spotify not reachable: the box's own media still play). Once ready, a reload of the page (a new
+  // theme) is not held again.
+  app.get('/api/display-ready', async (_req, res) => {
+    const state = await displayReady().catch(() => ({ ready: false, waiting: ['error'] }))
+    res.setHeader('Cache-Control', 'no-store')
+    res.json(state)
+  })
   // KN: the display's start page with the boot screen in it: its first picture is the boot screen. Loaded on its own
   // (/api/bootscreen/current-splash), the picture came 1.8 s after the page, grey and white in between; as a CSS
   // background (a data: URL) it was still decoded after the first pictures of the page at boot (recorded on Jakob's
@@ -544,6 +616,7 @@ if (productionServe) {
       res.setHeader('Cache-Control', 'no-store')
       res.type('html').send(
         html
+          .replace('</head>', displayReadySeen ? '</head>' : `${WAKING_HEAD}</head>`)
           .replaceAll("url('/api/bootscreen/current-splash')", 'none')
           .replace(
             '<div id="mupi-boot"></div>',
