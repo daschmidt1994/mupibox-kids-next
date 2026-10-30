@@ -346,11 +346,25 @@ export async function resolveSyncItems(
   config: SpotifySyncConfig,
   failures: string[] = [],
   failedSources: FailedSource[] = [],
-): Promise<{ items: Map<string, SyncItem>; perPlaylistCounts: Map<string, number> }> {
+): Promise<{ items: Map<string, SyncItem>; perPlaylistCounts: Map<string, number>; stoppedBy?: SpotifyApiException }> {
   const items = new Map<string, SyncItem>()
   const perPlaylistCounts = new Map<string, number>()
+  // A limit (the box's own or Spotify's 429) ends the asking, but what was read until then is applied: with one artist
+  // of hundreds of albums, the run used to end before every write, and none of the subscriptions reached the box for
+  // hours. What is not read is kept as it is (a failed source), the state machine reports the limit after applying.
+  let stoppedBy: SpotifyApiException | undefined
+  const limitReached = (err: unknown): boolean => {
+    if (!(err instanceof SpotifyApiException) || err.detail.kind !== 'rate-limit') return false
+    stoppedBy ??= err
+    return true
+  }
 
   for (const playlist of playlists) {
+    if (stoppedBy) {
+      failures.push(`playlist ${playlist.name || playlist.id}`)
+      failedSources.push({ kind: 'playlist', id: playlist.id })
+      continue
+    }
     // One playlist that cannot be read is skipped (the run adds and updates, but removes nothing - see
     // computeSyncDiff); it used to end the whole run with INTERNAL_ERROR, and then nothing at all came in - also not
     // the artists and albums below. A login, rate-limit or network failure still ends the run.
@@ -369,7 +383,7 @@ export async function resolveSyncItems(
         if (playlist.snapshotId && tracks.length > 0) keepPlaylistTracks(playlist.id, playlist.snapshotId, tracks)
       }
     } catch (err) {
-      if (err instanceof SpotifyApiException && err.detail.kind !== 'internal') throw err
+      if (!limitReached(err) && err instanceof SpotifyApiException && err.detail.kind !== 'internal') throw err
       failures.push(`playlist ${playlist.name || playlist.id}`)
       failedSources.push({ kind: 'playlist', id: playlist.id })
       console.warn(`${new Date().toLocaleString()}: [spotify-sync] playlist ${playlist.id} (${playlist.name}) not read: ${(err as Error).message}`)
@@ -395,6 +409,11 @@ export async function resolveSyncItems(
   for (const pin of config.explicit_albums ?? []) {
     const albumId = pin?.id
     if (!albumId || items.has(`album:${albumId}`)) continue
+    if (stoppedBy) {
+      failures.push(`album ${albumId}`)
+      failedSources.push({ kind: 'album', id: albumId })
+      continue
+    }
     try {
       let album = keptAlbum(albumId)
       if (!album) {
@@ -406,7 +425,7 @@ export async function resolveSyncItems(
     } catch (err) {
       // Spotify blocking the app (429), a login or network failure: the run ends here - asking on for the next albums
       // and artists only kept the block going (state-machine: RATE_LIMITED waits for Spotify's time)
-      if (err instanceof SpotifyApiException && err.detail.kind !== 'internal') throw err
+      if (!limitReached(err) && err instanceof SpotifyApiException && err.detail.kind !== 'internal') throw err
       failures.push(`album ${albumId}`)
       failedSources.push({ kind: 'album', id: albumId })
       console.warn(
@@ -420,6 +439,11 @@ export async function resolveSyncItems(
   // window (1-indexed, Phase 17d), and add each as an album-promotion item.
   for (const sub of config.artists ?? []) {
     if (!sub?.id) continue
+    if (stoppedBy) {
+      failures.push(`artist ${sub.name || sub.id}`)
+      failedSources.push({ kind: 'artist', id: sub.id, name: sub.name })
+      continue
+    }
     try {
       const albums = await fetchArtistAlbums(sub.id, accessToken, sub.album_types ?? 'album')
       albums.sort((a, b) => (a.release_date ?? '').localeCompare(b.release_date ?? ''))
@@ -439,7 +463,7 @@ export async function resolveSyncItems(
       }
     } catch (err) {
       // (as for the albums above: a block, a login or network failure ends the run)
-      if (err instanceof SpotifyApiException && err.detail.kind !== 'internal') throw err
+      if (!limitReached(err) && err instanceof SpotifyApiException && err.detail.kind !== 'internal') throw err
       failures.push(`artist ${sub.name || sub.id}`)
       failedSources.push({ kind: 'artist', id: sub.id, name: sub.name })
       console.warn(
@@ -455,7 +479,13 @@ export async function resolveSyncItems(
     .map((it) => it.artistId)
     .filter((id): id is string => typeof id === 'string' && id.length > 0)
   if (artistIds.length > 0) {
-    const covers = await fetchArtistCovers(artistIds, accessToken)
+    // (after a limit: only the kept pictures - an entry without one keeps its picture, see diff/apply)
+    let covers = new Map<string, string>()
+    try {
+      covers = await fetchArtistCovers(stoppedBy ? artistIds.filter((id) => keptArtistCover(id) !== undefined) : artistIds, accessToken)
+    } catch (err) {
+      if (!limitReached(err)) throw err
+    }
     for (const it of items.values()) {
       if (it.artistId && !it.artistCover) {
         const c = covers.get(it.artistId)
@@ -464,7 +494,7 @@ export async function resolveSyncItems(
     }
   }
 
-  return { items, perPlaylistCounts }
+  return { items, perPlaylistCounts, stoppedBy }
 }
 
 /**

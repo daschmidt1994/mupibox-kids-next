@@ -269,6 +269,22 @@ export async function runSync(trigger: SyncTrigger, deps: RunSyncDeps): Promise<
     }
     deps.releaseDataLock()
 
+    // 8b. A limit ended the asking: what was read is in the library now, the run ends as the limit says (waits for it)
+    if (resolved.stoppedBy) {
+      const counts = {
+        additions: applyResult.appliedAdditions,
+        updates: applyResult.appliedUpdates,
+        removals: applyResult.appliedRemovals,
+        conflictsCount: diff.conflicts.length,
+        conflicts: diff.conflicts,
+      }
+      if (counts.additions || counts.updates || counts.removals)
+        console.log(
+          `${new Date().toLocaleString()}: [spotify-sync] applied before the limit: ${counts.additions} added, ${counts.updates} updated, ${counts.removals} removed`,
+        )
+      return mapSpotifyError(resolved.stoppedBy, (kind) => { failureCounters = bumpFailureCounter(failureCounters, kind) }, finalise, counts)
+    }
+
     // 9. Success — reset failure counters
     failureCounters = {}
     const playlistsSeen = playlistsDiscovered.map((p) => ({
@@ -339,9 +355,11 @@ function mapSpotifyError(
   bump: (kind: SyncFailureKind) => void,
   finalise: (
     state: SyncState,
-    c?: { additions: number; updates: number; removals: number; conflictsCount: number },
+    c?: { additions: number; updates: number; removals: number; conflictsCount: number; conflicts?: SyncStateFile['conflicts'] },
     e?: { reason?: string; retryAfterSeconds?: number; local?: boolean },
   ) => RunSyncResult,
+  // (what was applied before a limit ended the run)
+  counts?: { additions: number; updates: number; removals: number; conflictsCount: number; conflicts?: SyncStateFile['conflicts'] },
 ): RunSyncResult {
   if (err instanceof SpotifyApiException) {
     const k = err.detail.kind
@@ -351,7 +369,7 @@ function mapSpotifyError(
     if (!local) bump(kind)
     const mappedState: SyncState =
       kind === 'auth' ? 'AUTH_FAILED' : kind === 'rate-limit' ? 'RATE_LIMITED' : kind === 'network' ? 'NETWORK_ERROR' : 'INTERNAL_ERROR'
-    return finalise(mappedState, undefined, {
+    return finalise(mappedState, counts, {
       reason: err.detail.reason,
       retryAfterSeconds: 'retryAfterSeconds' in err.detail ? err.detail.retryAfterSeconds : undefined,
       local,
