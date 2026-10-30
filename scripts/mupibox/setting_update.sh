@@ -121,10 +121,13 @@ timeout=$(/usr/bin/jq -r .timeout.idleDisplayOff ${MUPIBOX_CONFIG})
 # default for the X server's BlankTime).
 timeout_int=$(printf '%s' "${timeout}" | tr -dc '0-9')
 : "${timeout_int:=0}"
-/usr/bin/sed -i 's|.*Option "BlankTime".*|    Option "BlankTime" "'"${timeout_int}"'"|g' ${DISPLAY_STANDBY}
-# The DPMS times the same (0 = never): the blanking only empties the picture, DPMS "off" is what get_monitor.sh
-# switches the backlight off with - with the X server's own default (5 min) it went dark before the time set. Added
-# next to BlankTime where they are missing (a box set up before).
+# KN: no blanking (BlankTime 0): it only painted the picture black - the screen goes dark through DPMS "off" alone
+# (get_monitor.sh switches the backlight off with it), and the screenshot in the app and in Home Assistant showed
+# black instead of what is on the display.
+/usr/bin/sed -i 's|.*Option "BlankTime".*|    Option "BlankTime" "0"|g' ${DISPLAY_STANDBY}
+# The DPMS times (0 = never): DPMS "off" is what get_monitor.sh switches the backlight off with - with the X server's
+# own default (5 min) it went dark before the time set. Added next to BlankTime where they are missing (a box set up
+# before).
 /usr/bin/sed -i '/Option "\(StandbyTime\|SuspendTime\|OffTime\)"/d' ${DISPLAY_STANDBY}
 /usr/bin/sed -i 's|.*Option "BlankTime".*|&\n    Option "StandbyTime" "'"${timeout_int}"'"\n    Option "SuspendTime" "'"${timeout_int}"'"\n    Option "OffTime" "'"${timeout_int}"'"|' ${DISPLAY_STANDBY}
 

@@ -1188,7 +1188,8 @@ export function createElternApiRouter(deps: ElternRouterDeps): Router {
     if (timeoutMutations.idleDisplayOff !== undefined) {
       const min = Number(timeoutMutations.idleDisplayOff)
       const sec = String(min * 60)
-      const xset = min > 0 ? ['s', sec, sec, 'dpms', sec, sec, sec] : ['s', 'off', 'dpms', '0', '0', '0']
+      // (KN: no blanking - it only painted the picture black, and the screenshots showed black; dark through DPMS alone)
+      const xset = min > 0 ? ['s', 'off', 'dpms', sec, sec, sec] : ['s', 'off', 'dpms', '0', '0', '0']
       execFile('xset', xset, { env: { ...process.env, DISPLAY: ':0' }, timeout: 5000 }, (err) => {
         if (err) console.warn(`${new Date().toLocaleString()}: [eltern] xset ${xset.join(' ')}: ${err.message}`)
       })
