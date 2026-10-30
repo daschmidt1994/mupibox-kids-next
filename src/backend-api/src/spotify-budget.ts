@@ -27,7 +27,9 @@ export interface SpotifyLimits {
   gapSeconds: number
 }
 
-export const DEFAULT_SPOTIFY_LIMITS: SpotifyLimits = { window: 15, hour: 120, day: 600, gapSeconds: 3 }
+// (KN 30.10.2026: a Spotify app of the box gets about 100 requests a day - Jakob's box blocked after 100+, Julia's after
+// 117 within 24 h of its first request, each for the rest of those 24 h; 600 a day was far above it)
+export const DEFAULT_SPOTIFY_LIMITS: SpotifyLimits = { window: 10, hour: 40, day: 80, gapSeconds: 3 }
 export const SPOTIFY_LIMIT_RANGE: Record<keyof SpotifyLimits, [number, number]> = {
   window: [3, 60],
   hour: [20, 1000],
@@ -97,6 +99,16 @@ function loadLimits(): SpotifyLimits {
     const kept = JSON.parse(fs.readFileSync(LIMITS_FILE, 'utf8'))
     limits = normalizeLimits(kept?.limits)
     lastLockout = kept?.lastLockout && typeof kept.lastLockout.at === 'number' ? kept.lastLockout : undefined
+    // (limits kept from before 30.10.2026 - set when about 100 a day were not known yet: down to the new defaults once)
+    if (kept?.v !== 2) {
+      limits = {
+        ...limits,
+        window: Math.min(limits.window, DEFAULT_SPOTIFY_LIMITS.window),
+        hour: Math.min(limits.hour, DEFAULT_SPOTIFY_LIMITS.hour),
+        day: Math.min(limits.day, DEFAULT_SPOTIFY_LIMITS.day),
+      }
+      writeJson(LIMITS_FILE, { v: 2, limits, lastLockout })
+    }
   } catch {
     limits = { ...DEFAULT_SPOTIFY_LIMITS }
   }
@@ -274,7 +286,7 @@ export function spotifyBudgetView(now = Date.now()): SpotifyBudgetView {
 /** New limits from the app (each kept within SPOTIFY_LIMIT_RANGE). */
 export function setSpotifyLimits(raw: Partial<Record<keyof SpotifyLimits, unknown>>): SpotifyLimits {
   limits = normalizeLimits({ ...loadLimits(), ...raw })
-  writeJson(LIMITS_FILE, { limits, lastLockout })
+  writeJson(LIMITS_FILE, { v: 2, limits, lastLockout })
   return limits
 }
 
@@ -294,12 +306,23 @@ onSpotifyBlockNoted(() => {
   const lowered = next.window !== l.window || next.hour !== l.hour || next.day !== l.day
   lastLockout = { at: now, window: c.window, hour: c.hour, day: c.day, ...(lowered ? { lowered: next } : {}) }
   limits = next
-  writeJson(LIMITS_FILE, { limits, lastLockout })
+  writeJson(LIMITS_FILE, { v: 2, limits, lastLockout })
   if (lowered)
     console.warn(
       `${new Date().toLocaleString()}: [Spotify] blocked after ${c.window} requests in 30 s, ${c.hour} in the hour, ${c.day} in 24 h - the box's limits lowered to ${next.window}/${next.hour}/${next.day}`,
     )
 })
+
+/**
+ * Requests someone else sent (the player: play, pause, its devices) - counted, never held back: the box's own player
+ * must not wait for the budget, but what it asks Spotify counts against the same Spotify app.
+ */
+export function noteSpotifyRequests(n: number, now = Date.now()): void {
+  if (OFF) return
+  const list = loadEntries()
+  for (let i = 0; i < Math.min(1000, Math.max(0, Math.floor(n))); i++) list.push({ t: now })
+  saveSoon()
+}
 
 /** For the tests: forget what is kept in memory (the files stay). */
 export function resetSpotifyBudgetMemory(): void {

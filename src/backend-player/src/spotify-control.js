@@ -203,6 +203,32 @@ const spotifyApi = new SpotifyWebApi({
   refreshToken: config.spotify.refreshToken,
 })
 
+// KN: every request of the player to Spotify's Web API (play, pause, devices - not the token's refresh) counted in the
+// box's budget (backend spotify-budget.ts): the same Spotify app, and Spotify blocks it after about 100 a day. Sent to
+// the backend every 5 seconds, never held back.
+{
+  const HttpManager = require('spotify-web-api-node/src/http-manager')
+  const make = HttpManager._makeRequest
+  let pending = 0
+  HttpManager._makeRequest = function (method, options, uri, callback) {
+    if (typeof uri === 'string' && uri.startsWith('https://api.spotify.com/')) pending++
+    return make.call(this, method, options, uri, callback)
+  }
+  setInterval(() => {
+    if (!pending) return
+    const n = pending
+    pending = 0
+    fetch('http://127.0.0.1:8200/api/spotify-budget/note', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ n }),
+      signal: AbortSignal.timeout(3000),
+    }).catch(() => {
+      pending = Math.min(pending + n, 1000)
+    })
+  }, 5000).unref()
+}
+
 /* sets and refreshes access token every hour */
 // .catch: without network (e.g. right after boot) the refresh fails, and an unhandled rejection
 // ends the process under Node 22 - the player then crash-looped until the WiFi was up.

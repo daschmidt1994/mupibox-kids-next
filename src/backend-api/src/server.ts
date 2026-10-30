@@ -66,6 +66,7 @@ import { episodeKey, MAX_KEEP, type OfflineEpisode, PodcastOffline } from './pod
 import { setFeedHeadReader } from './podcast-search'
 import { EpisodeState, episodeStateSettings } from './episode-state'
 import { uiScale } from './ui-scale'
+import { noteSpotifyRequests } from './spotify-budget'
 import { browserGuard, corsOptionsFor, isAllowedHost, isLoopback, localOnly, localOrElternSession, logValue, PROXY_PORT, setConfiguredHosts, viaProxy } from './request-guard'
 
 // Force IPv4 for DNS lookups to avoid EAI_AGAIN errors on Raspberry Pi
@@ -587,6 +588,13 @@ const WAKING_HEAD = `<style>
 
 // We only want to serve the Angular app as static files in production so that we can start
 // the Angular development server during development to be able to hot-reload and debug.
+// KN: the player's requests to Spotify's Web API (play, pause, its devices), counted in the box's budget too - the same
+// Spotify app; never held back there (spotify-budget.ts noteSpotifyRequests). Only from the box itself.
+app.post('/api/spotify-budget/note', localOnly, (req, res) => {
+  noteSpotifyRequests(Number((req.body as { n?: unknown } | undefined)?.n) || 0)
+  res.json({ ok: true })
+})
+
 // We explicitely check for !== 'development' for now so we do not need to set this env in
 // production.
 if (productionServe) {
