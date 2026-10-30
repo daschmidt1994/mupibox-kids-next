@@ -553,6 +553,49 @@ async function displayReady(): Promise<{ ready: boolean; waiting: string[] }> {
   return { ready: true, waiting: [] }
 }
 
+// KN: Soloist plays (kidsnext/soloist): the display's Web Playback SDK plays nothing then, and its getCurrentState() -
+// where the player page reads title and progress every second - said null: the progress bar stood still. Wrapped here
+// (the display's code cannot be built in Kids Next): while Soloist plays, its state comes from the player
+// (/soloist/state, in the SDK's shape); otherwise the SDK's own. Caught when the SDK sets window.Spotify, and later
+// once more in case it set it some other way.
+const SOLOIST_HEAD = `<script>(function () {
+  var kept = { at: 0, state: null, asking: null };
+  function soloist() {
+    if (Date.now() - kept.at < 700) return Promise.resolve(kept.state);
+    if (kept.asking) return kept.asking;
+    kept.asking = fetch('/api/soloist/state', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .catch(function () { return null; })
+      .then(function (j) { kept = { at: Date.now(), state: (j && j.state) || null, asking: null }; return kept.state; });
+    return kept.asking;
+  }
+  function wrapState(own) {
+    if (!own || own.__kn) return own;
+    var f = function () { var self = this; return soloist().then(function (s) { return s || own.call(self); }); };
+    f.__kn = true;
+    return f;
+  }
+  function patch(S) {
+    if (!S || !S.Player || S.Player.__kn) return S;
+    var P = S.Player;
+    if (P.prototype && P.prototype.getCurrentState) P.prototype.getCurrentState = wrapState(P.prototype.getCurrentState);
+    var W = function () {
+      var p = new (Function.prototype.bind.apply(P, [null].concat([].slice.call(arguments))))();
+      if (Object.prototype.hasOwnProperty.call(p, 'getCurrentState')) p.getCurrentState = wrapState(p.getCurrentState);
+      return p;
+    };
+    W.prototype = P.prototype;
+    W.__kn = true;
+    try { S.Player = W; } catch (e) {}
+    return S;
+  }
+  var value;
+  try {
+    Object.defineProperty(window, 'Spotify', { configurable: true, get: function () { return value; }, set: function (v) { value = patch(v); } });
+  } catch (e) {}
+  var tries = 0, t = setInterval(function () { if (window.Spotify) patch(window.Spotify); if (++tries > 120) clearInterval(t); }, 500);
+})();</script>`
+
 // (in the page's head: the display's start only, as the boot screen's script - not in a preview in a frame)
 const WAKING_HEAD = `<style>
   mupi-swiper, .km-hbtn, ion-buttons[slot="start"] { transition: filter .6s, opacity .6s; }
@@ -588,6 +631,17 @@ const WAKING_HEAD = `<style>
 
 // We only want to serve the Angular app as static files in production so that we can start
 // the Angular development server during development to be able to hot-reload and debug.
+// KN: what Soloist plays, for the display (SOLOIST_HEAD) - from the player; null while Soloist does not play
+app.get('/api/soloist/state', localOnly, async (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store')
+  try {
+    const r = await fetch('http://127.0.0.1:5005/soloist/state', { signal: AbortSignal.timeout(2000) })
+    res.json(r.ok ? await r.json() : { state: null })
+  } catch {
+    res.json({ state: null })
+  }
+})
+
 // KN: the player's requests to Spotify's Web API (play, pause, its devices), counted in the box's budget too - the same
 // Spotify app; never held back there (spotify-budget.ts noteSpotifyRequests). Only from the box itself.
 app.post('/api/spotify-budget/note', localOnly, (req, res) => {
@@ -625,7 +679,7 @@ if (productionServe) {
       res.setHeader('Cache-Control', 'no-store')
       res.type('html').send(
         html
-          .replace('</head>', displayReadySeen ? '</head>' : `${WAKING_HEAD}</head>`)
+          .replace('</head>', displayReadySeen ? `${SOLOIST_HEAD}</head>` : `${SOLOIST_HEAD}${WAKING_HEAD}</head>`)
           .replaceAll("url('/api/bootscreen/current-splash')", 'none')
           .replace(
             '<div id="mupi-boot"></div>',

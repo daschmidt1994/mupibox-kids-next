@@ -3549,6 +3549,11 @@ app.get('/soloist', async (_req, res) => {
   if (name && soloistLocal.ready()) return res.json({ running: true, name, deviceId: soloistLocal.LOCAL_DEVICE_ID, known: true, inUse: true })
   res.json({ running: !!name, name, deviceId: name ? soloistDevice : null, known: name ? soloistKnown : null, inUse: !!soloistDevice && activeDevice === soloistDevice })
 })
+// KN: what Soloist plays, in the Web Playback SDK's shape - the display reads its progress from the SDK, which plays
+// nothing while Soloist does (the backend hands it to the display, see SOLOIST_HEAD in server.ts)
+app.get('/soloist/state', (_req, res) => {
+  res.json({ state: soloistLocal.ready() && currentMeta.currentPlayer === 'spotify' ? soloistLocal.sdkState() : null })
+})
 // (a new key, or none: looked for anew at the next start)
 app.get('/soloist/forget', (_req, res) => {
   soloistSeen = { at: 0, name: null }

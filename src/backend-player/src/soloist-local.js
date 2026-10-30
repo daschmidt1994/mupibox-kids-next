@@ -228,6 +228,40 @@ function webState() {
   }
 }
 
+/** Soloist's state as the Web Playback SDK's getCurrentState() gives it (the display reads its progress there). */
+function sdkState() {
+  const w = webState()
+  if (!w.item) return null
+  const t = w.item
+  return {
+    paused: !w.is_playing,
+    loading: false,
+    position: w.progress_ms,
+    duration: t.duration_ms,
+    timestamp: Date.now(),
+    shuffle: w.shuffle_state,
+    repeat_mode: w.repeat_state === 'track' ? 2 : w.repeat_state === 'context' ? 1 : 0,
+    context: { uri: w.context?.uri ?? null, metadata: {} },
+    disallows: {},
+    restrictions: {},
+    track_window: {
+      current_track: {
+        id: t.id,
+        uri: t.uri,
+        type: t.type,
+        media_type: 'audio',
+        name: t.name,
+        duration_ms: t.duration_ms,
+        is_playable: true,
+        album: { uri: t.album?.uri ?? '', name: t.album?.name ?? '', images: t.album?.images ?? [] },
+        artists: (t.artists ?? []).map((a) => ({ uri: a.uri, name: a.name })),
+      },
+      previous_tracks: [],
+      next_tracks: [],
+    },
+  }
+}
+
 /**
  * Starts what the Web API's play would (context_uri / uris, offset.position, position_ms) - or resumes without either.
  * Soloist's play takes no offset: the album is started and skipped forward to the track, then sought.
@@ -273,6 +307,7 @@ module.exports = {
   ready: () => !!ws && ws.readyState === 1 && loggedIn,
   api,
   webState,
+  sdkState,
   deviceName: () => deviceName,
   // (for trying the mapping with a recorded message)
   _message: onMessage,
