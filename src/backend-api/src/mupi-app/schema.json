@@ -1337,6 +1337,16 @@
    "sections": []
   },
   {
+   "id": "soloist",
+   "slug": "spotify-soloist",
+   "area": "bibliothek",
+   "parent": "spotify",
+   "title": "Soloist",
+   "description": "Spotify ohne Browser, eigener API-Key",
+   "icon": "music",
+   "sections": []
+  },
+  {
    "id": "wizard",
    "slug": "spotify-setup",
    "area": "bibliothek",
@@ -6667,6 +6677,21 @@
    "l": "System",
    "where": "System",
    "id": "g-system"
+  },
+  {
+   "l": "Soloist",
+   "where": "Spotify › Soloist",
+   "id": "soloist"
+  },
+  {
+   "l": "Spotify ohne Browser",
+   "where": "Spotify › Soloist",
+   "id": "soloist"
+  },
+  {
+   "l": "Soloist-API-Key",
+   "where": "Spotify › Soloist",
+   "id": "soloist"
   }
  ],
  "themes": [

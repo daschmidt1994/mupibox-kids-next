@@ -1,0 +1,10 @@
+[Unit]
+Description=MuPiBox Kids Next: Spotify Soloist jede Woche aktualisieren (Versionen laufen nach 90 Tagen ab)
+
+[Timer]
+OnCalendar=Sun 04:15
+Persistent=true
+RandomizedDelaySec=2h
+
+[Install]
+WantedBy=timers.target

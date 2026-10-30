@@ -618,6 +618,69 @@ let activeDevice = null
 let displaySpotifyDevice = null // the display's Web Playback SDK device, as reported by the display
 let displayDeviceReportedAt = 0 // when the display last reported it (see playOnDevice)
 let displayRecoveryAt = 0 // when the display was last asked to sign in to Spotify anew
+
+// KN: Spotify Soloist (kidsnext/soloist/mupi-kn-soloist) - Spotify's own player without a browser, with the parents'
+// API key. Running, it is the box's Spotify player; the display's (Web Playback SDK) is kept as the fallback. Spotify
+// lists it for the account once it was chosen in a Spotify app (its pairing); it is found there by its name.
+const SOLOIST_INFO = '/var/lib/mupibox-kn/soloist.json'
+const SOLOIST_PID = '/var/lib/mupibox-kn/soloist/soloist.pid'
+let soloistDevice = null // its Spotify device id, once found
+let soloistKnown = null // false: not among the account's devices at the last look (not paired yet)
+let soloistLookedAt = 0
+const SOLOIST_BIN = '/opt/mupibox-kn/soloist/soloist'
+let soloistSeen = { at: 0, name: null }
+// its name while it runs (its pid file - Soloist's docs say it "may" write one -, else a look through the processes;
+// kept for 5 s: asked at every start, pause and device change)
+function soloistName() {
+  if (Date.now() - soloistSeen.at < 5000) return soloistSeen.name
+  let name = null
+  try {
+    const n = JSON.parse(fs.readFileSync(SOLOIST_INFO, 'utf8'))?.name
+    if (typeof n === 'string' && n && soloistRuns()) name = n
+  } catch {}
+  soloistSeen = { at: Date.now(), name }
+  return name
+}
+function soloistRuns() {
+  try {
+    const pid = Number.parseInt(fs.readFileSync(SOLOIST_PID, 'utf8'), 10)
+    if (pid > 0) {
+      process.kill(pid, 0)
+      return true
+    }
+  } catch {}
+  try {
+    return fs.readdirSync('/proc').some((d) => {
+      if (!/^\d+$/.test(d)) return false
+      try {
+        return fs.readFileSync(`/proc/${d}/cmdline`, 'utf8').startsWith(SOLOIST_BIN)
+      } catch {
+        return false
+      }
+    })
+  } catch {
+    return false
+  }
+}
+// (asked at a start; not paired yet: Spotify is asked again after a minute at the earliest)
+async function soloistDeviceForStart() {
+  const name = soloistName()
+  if (!name) {
+    soloistDevice = null
+    return null
+  }
+  if (soloistDevice) return soloistDevice
+  if (Date.now() - soloistLookedAt < 60000) return null
+  soloistLookedAt = Date.now()
+  const data = await spotifyApi.getMyDevices()
+  counter.countgetMyDevices++
+  const mine = (data.body.devices ?? []).find((d) => d?.id && d.name === name)
+  soloistKnown = !!mine
+  soloistDevice = mine?.id ?? null
+  if (mine) log.info(`${now()}: [Spotify Control] Soloist plays Spotify: ${name}`)
+  else log.info(`${now()}: [Spotify Control] Soloist runs, but Spotify does not list "${name}" yet - choose it once in a Spotify app`)
+  return soloistDevice
+}
 // AR5-4: was `const nowDate = new Date()` evaluated once at module-load.
 // All 86 log templates that used `${now()}` printed
 // the boot timestamp on every line, making production debugging useless.
@@ -1628,7 +1691,7 @@ function handleSpotifyError(err, from) {
 // (only the box's: the display's player, else the account's device with the box's name - it took the first device of
 // the account, a parent's phone or a TV, and played there)
 function setActiveDevice() {
-  const own = displaySpotifyDevice || activeDevice
+  const own = (soloistName() && soloistDevice) || displaySpotifyDevice || activeDevice
   if (own) {
     activeDevice = own
     transferPlaybackToActiveDevice()
@@ -1771,6 +1834,8 @@ function pauseOwnSpotify(why) {
       ({ body }) => {
         const device = body?.device
         if (device?.id && (device.id === own || (!own && ownName && device.name === ownName))) return device.id
+        // (KN: Soloist is the box's too - also when this process started anew and does not know its id yet)
+        if (device?.id && (device.id === soloistDevice || (device.name && device.name === soloistName()))) return device.id
         if (device?.id) throw notOwn(`another device plays (${device.name ?? device.id})`, { foreign: true })
         if (!own) throw notOwn('no own Spotify player known')
         return own
@@ -2149,6 +2214,13 @@ function overtakenStart() {
 // device yet): by its name among the account's devices, else the display signs in anew. A start without a device plays
 // on the account's active one - a parent's phone that plays right now.
 async function ownDeviceForStart() {
+  try {
+    const solo = await soloistDeviceForStart()
+    if (solo) return solo
+  } catch (err) {
+    if (isSpotify429(err, 'ownDeviceForStart')) throw err
+    log.debug(`${now()}: [Spotify Control] Soloist not looked for: ${err}`)
+  }
   if (displaySpotifyDevice) return displaySpotifyDevice
   const name = config?.['node-sonos-http-api']?.server || muPiBoxConfig?.mupibox?.host
   if (name) {
@@ -2184,6 +2256,18 @@ async function playOnDevice(playOptions) {
   }
   return spotifyApi.play(playOptions).catch(async (err) => {
     if (err?.statusCode !== 404) throw err
+    // KN: Soloist not reachable (stopped, signed out): the display's player plays, Soloist is looked for again later
+    if (playOptions.device_id === soloistDevice) {
+      log.info(`${now()}: [Spotify Control] Soloist not reachable - the display's player plays`)
+      soloistDevice = null
+      soloistLookedAt = Date.now()
+      const fallback = displaySpotifyDevice || (await recoverDisplayDevice())
+      if (overtaken()) throw overtakenStart()
+      if (fallback) {
+        activeDevice = fallback
+        return spotifyApi.play({ ...playOptions, device_id: fallback })
+      }
+    }
     // the display's device (or, without one, no active device at all): the display signs in anew first
     if (playOptions.device_id === displaySpotifyDevice) {
       const fresh = await recoverDisplayDevice()
@@ -2239,7 +2323,8 @@ function playMe() {
   }
 
   // Add device_id if we have an active device
-  if (activeDevice) {
+  // (KN: not the display's while Soloist runs - the start looks for Soloist, see ownDeviceForStart)
+  if (activeDevice && (!soloistName() || activeDevice === soloistDevice)) {
     playOptions.device_id = activeDevice
     log.debug(`${now()}: [Spotify Control] Playing on device: ${activeDevice}`)
   }
@@ -3403,6 +3488,29 @@ app.get('/state', (_req, res) => {
 // Whether something plays now (the backend's announcements pause it and go on afterwards, speech.ts)
 app.get('/playing', (_req, res) => {
   res.json({ playing: isActuallyPlaying() })
+})
+
+// KN: Soloist for the app's page (Einstellungen › Spotify › Soloist): running, found among the account's devices, used
+app.get('/soloist', async (_req, res) => {
+  // (not found yet: looked for now - at most once a minute, the page asks every 10 s while it waits for the coupling)
+  if (soloistName() && !soloistDevice && !spotifyBlockedUntil()) {
+    try {
+      await soloistDeviceForStart()
+    } catch (err) {
+      if (!isSpotify429(err, 'soloist')) log.debug(`${now()}: [Spotify Control] Soloist not looked for: ${err}`)
+    }
+  }
+  const name = soloistName()
+  res.json({ running: !!name, name, deviceId: name ? soloistDevice : null, known: name ? soloistKnown : null, inUse: !!soloistDevice && activeDevice === soloistDevice })
+})
+// (a new key, or none: looked for anew at the next start)
+app.get('/soloist/forget', (_req, res) => {
+  soloistSeen = { at: 0, name: null }
+  soloistDevice = null
+  soloistKnown = null
+  soloistLookedAt = 0
+  if (activeDevice && activeDevice !== displaySpotifyDevice) activeDevice = null
+  res.json({ ok: true })
 })
 
 // Which device the display reported (the app's page "Zugangsdaten" asks Spotify whether it still knows it)

@@ -5046,6 +5046,7 @@ function spotifyTop() {
   parts.push(`<section class="card nav-card"><div class="navlist">
       ${navRow('syncopt', 'Sync-Einstellungen', 'Playlist-Präfix, Intervall, an/aus', 'gear')}
       ${navRow('spzugang', 'Zugangsdaten', 'Client ID, Secret, Anmeldung', 'lock')}
+      ${navRow('soloist', 'Soloist', 'Spotify ohne Browser – mit eigenem API-Key', 'music')}
       ${navRow('wizard', 'Einrichtungs-Assistent', ready ? 'Alles eingerichtet – Schritt für Schritt ansehen' : 'Schritt für Schritt – zeigt, was fehlt', 'sync')}
     </div></section>`)
 
@@ -10451,6 +10452,103 @@ function mountNetbird(root, page) {
   if (nb.status?.installing || nb.status?.daemonStatus === 'Connecting') every(4000, () => renderPage(page))
 }
 
+// KN: Bibliothek › Spotify › Soloist - Spotify's own player without a browser (kidsnext/soloist/mupi-kn-soloist), with
+// the parents' own API key; the box downloads it from Spotify itself (it must not be passed on)
+const solo = { status: null, missing: false }
+
+async function loadSoloist() {
+  const r = await api(`${API}/kn/soloist`)
+  solo.missing = r.status === 503
+  solo.status = r.ok ? r.body : null
+}
+
+const soloDate = (iso) => (iso ? new Date(iso).toLocaleDateString('de-DE', { day: 'numeric', month: 'long', year: 'numeric' }) : '–')
+
+function soloistTop() {
+  const s = solo.status
+  const intro = `<p class="page-intro">Soloist ist Spotifys eigener Player – ohne Browser. Die Box spielt Spotify damit stabiler und ist nach dem Start schneller bereit. Ohne Soloist spielt sie wie bisher im Browser.</p>`
+  if (solo.missing || !s) {
+    return [intro, `<section class="card"><h2>Soloist</h2><p class="help">Der Soloist-Baustein von MuPiBox Kids Next ist auf dieser Box nicht installiert. Ein Update (System › Updates) bringt ihn mit.</p></section>`]
+  }
+  if (s.arch === 'unsupported') {
+    return [intro, `<section class="card"><h2>Soloist</h2><p class="help">Für diese Box gibt es Soloist nicht.</p></section>`]
+  }
+  if (!s.keySet) {
+    return [
+      intro,
+      `<section class="card"><div class="card-head"><h2>Soloist</h2><span class="chip">aus</span></div>
+        <ol class="help steps">
+          <li>Auf <b translate="no">developer.spotify.com</b> mit einem Spotify-Premium-Konto anmelden.</li>
+          <li>Im Dashboard „Spotify Soloist API Key“ öffnen, den Bedingungen zustimmen und einen Key erzeugen.</li>
+          <li>Den Key hier eintragen. Die Box lädt Soloist dann selbst von Spotify (1–2 Minuten).</li>
+          <li>Einmal koppeln: In der Spotify-App am Handy – angemeldet mit dem Spotify-Konto der Box, im selben WLAN – unter „Geräte“ <b translate="no">${esc(`${s.hostname || 'mupibox'} (Soloist)`)}</b> auswählen.</li>
+        </ol>
+        <div class="btns"><button class="btn primary" id="so-key">API-Key eintragen</button><a class="btn" href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">${icon('ext', 18)}developer.spotify.com</a></div>
+        <p class="help" style="margin:0">Der Key ist dein persönlicher: nicht weitergeben. Er liegt nur auf der Box, lesbar nur für das System.</p></section>`,
+    ]
+  }
+  const running = s.service === 'active'
+  const days = s.expires ? Math.floor((new Date(s.expires) - Date.now()) / 86400000) : null
+  const [cls, label] = !running ? ['danger', 'läuft nicht'] : s.inUse ? ['ok', 'spielt'] : s.paired ? ['ok', 'bereit'] : ['warn', 'nicht gekoppelt']
+  return [
+    intro,
+    `<section class="card"><div class="card-head"><h2>Soloist</h2><span class="chip ${cls}">${esc(label)}</span></div>
+      <dl class="kv">
+        <div><dt>Gerät</dt><dd translate="no">${esc(s.deviceName || '–')}</dd></div>
+        <div><dt>Version</dt><dd translate="no">${esc((s.version || '–').replace(/^soloist\s*/i, '').split(' ')[0] || '–')}</dd></div>
+        <div><dt>Gültig bis</dt><dd>${esc(soloDate(s.expires))}${days !== null && days < 14 ? ' – wird automatisch erneuert' : ''}</dd></div>
+      </dl>
+      ${running && s.paired === false ? `<div class="note warn">${icon('info', 18)}<span>Noch nicht gekoppelt: In der Spotify-App am Handy – angemeldet mit dem Spotify-Konto der Box, im selben WLAN – unter „Geräte“ <b translate="no">${esc(s.deviceName)}</b> einmal auswählen. Bis dahin spielt die Box im Browser.</span></div>` : ''}
+      ${!running ? `<div class="note warn">${icon('info', 18)}<span>Soloist läuft gerade nicht – die Box spielt Spotify im Browser. „Neu laden“ holt die neueste Version von Spotify und startet Soloist neu.</span></div>` : ''}
+      <div class="btns"><button class="btn" id="so-update">${icon('sync', 18)}Neu laden</button><button class="btn" id="so-key">Key ändern</button><button class="btn" id="so-off">Ausschalten</button></div>
+      <p class="help" style="margin:0">Spotify erlaubt jede Soloist-Version 90 Tage – die Box holt jede Woche die neueste.</p></section>`,
+  ]
+}
+
+function openSoloistKey(page) {
+  openSheet(
+    `<h2>Soloist-API-Key</h2>
+     <div class="field"><label for="so-k">API-Key</label><input class="input" id="so-k" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"><small>Aus dem Spotify-Dashboard („Spotify Soloist API Key“). Wird auf der Box gespeichert, nie angezeigt.</small></div>
+     <div class="btns"><button class="btn" data-close>Abbrechen</button><button class="btn primary" id="so-go">Speichern</button></div>
+     <p class="help" id="so-msg" style="margin:0"></p>`,
+    (sheet, close) => {
+      sheet.querySelector('[data-close]').onclick = close
+      $('#so-go', sheet).onclick = async () => {
+        const btn = $('#so-go', sheet)
+        btn.disabled = true
+        $('#so-msg', sheet).textContent = 'Lade Soloist von Spotify und starte es … (bis zu 2 Minuten)'
+        const r = await api(`${API}/kn/soloist/key`, { method: 'POST', body: { apiKey: $('#so-k', sheet).value } })
+        btn.disabled = false
+        if (!r.ok) {
+          $('#so-msg', sheet).textContent = r.body?.error ?? 'Das hat nicht geklappt'
+          return
+        }
+        close()
+        toast('Soloist läuft – jetzt einmal in der Spotify-App koppeln')
+        renderPage(page)
+      }
+    },
+  )
+}
+
+function mountSoloist(root, page) {
+  $('#so-key', root)?.addEventListener('click', () => openSoloistKey(page))
+  $('#so-update', root)?.addEventListener('click', async () => {
+    toast('Lade Soloist von Spotify …')
+    const r = await api(`${API}/kn/soloist/update`, { method: 'POST' })
+    toast(r.ok ? (r.body?.updated ? 'Neue Soloist-Version installiert' : 'Soloist ist aktuell') : (r.body?.error ?? 'Das hat nicht geklappt'), r.ok ? undefined : 'info')
+    renderPage(page)
+  })
+  $('#so-off', root)?.addEventListener('click', async () => {
+    if (!(await ask('Soloist ausschalten?', 'Der Key wird von der Box gelöscht, Spotify spielt wieder im Browser. Wieder einschalten geht mit dem Key.', 'Ausschalten'))) return
+    const r = await api(`${API}/kn/soloist/remove`, { method: 'POST' })
+    toast(r.ok ? 'Soloist ausgeschaltet' : (r.body?.error ?? 'Das hat nicht geklappt'), r.ok ? undefined : 'info')
+    renderPage(page)
+  })
+  // (not coupled yet: the card follows the coupling in the Spotify app)
+  if (solo.status?.keySet && solo.status?.service === 'active' && !solo.status?.paired) every(10000, () => renderPage(page))
+}
+
 // Einstellungen › Dienste: the block with the box's own shares (Samba, FTP, VNC)
 const isSharesSection = (s) => (s.items ?? []).some((it) => it.target === 'freigaben')
 
@@ -12068,6 +12166,7 @@ const CONTROLLERS = {
   experten: { load: loadExperts, top: expertsTop, sections: () => [], ownNav: true, mount: mountExperts },
   backup: { load: loadBackup, top: backupTop, sections: () => [], mount: mountBackup },
   netbird: { load: loadNetbird, top: netbirdTop, sections: () => [], mount: mountNetbird },
+  soloist: { load: loadSoloist, top: soloistTop, sections: () => [], mount: mountSoloist },
   updates: { load: loadUpdates, top: updatesTop, sections: () => [], ownNav: true, mount: mountUpdates },
   nas: {
     load: loadNas,

@@ -1,0 +1,220 @@
+#!/bin/bash
+#
+# MuPiBox Kids Next – Spotify Soloist (Spotifys offizieller Player ohne Browser). Für die Eltern-App und SSH, als root.
+#
+#   mupi-kn-soloist status [--json]     installiert?, Version, Ablaufdatum, Key hinterlegt?, Dienst
+#   mupi-kn-soloist install             Soloist von Spotify laden (falls noch nicht da), Dienste einrichten
+#   mupi-kn-soloist update [--force]    neueste Version von Spotify laden, wenn sie neuer ist; Dienst neu starten
+#   mupi-kn-soloist set-key             API-Key auf stdin (nie als Argument) speichern und Soloist starten
+#   mupi-kn-soloist remove-key          Key löschen, Soloist anhalten (die Box spielt Spotify wieder im Browser)
+#   mupi-kn-soloist restart             Dienst neu starten
+#
+# Spotify does not allow the program to be passed on: every box downloads it itself from Spotify's CDN. Each build
+# stops working 90 days after it was built (exit code 10) - the weekly timer and the service's OnFailure fetch a newer
+# one. The key is the parents' own (Spotify for Developers, Premium); it lies in /etc/mupibox-kn/secrets (root, 0600)
+# and reaches the program through systemd's EnvironmentFile. Soloist only takes it as an argument, so it can be seen in
+# the process list of the box - its own users only.
+
+set -o pipefail
+export LC_ALL=C.UTF-8
+umask 022
+
+DIR="${KN_SOLOIST_DIR:-/opt/mupibox-kn/soloist}"
+BIN="${DIR}/soloist"
+SECRETS="${KN_SECRETS_DIR:-/etc/mupibox-kn/secrets}"
+ENV_FILE="${SECRETS}/soloist.env"
+DATA="${KN_SOLOIST_DATA:-/var/lib/mupibox-kn/soloist}"
+# (not secret: the device name, for the box's player - it looks for that device among the account's; the key file is
+# root's only)
+INFO="${DATA%/*}/soloist.json"
+CACHE=/var/cache/mupibox-kn/soloist
+APP_DIR="${KN_APP_DIR:-/opt/mupibox-kn/app}"
+UNIT=mupi-kn-soloist
+CDN=https://soloist-builds.spotifycdn.com
+# (the port of the local WebSocket API - the box's player and the app read the state there; also in the service)
+WS_PORT=9095
+LIFETIME_DAYS=90
+JSON=0
+
+die() {
+	if [ "${JSON}" = 1 ]; then
+		jq -n --arg e "$1" '{ok: false, error: $e}'
+	else
+		echo "✘ $1" >&2
+	fi
+	exit "${2:-1}"
+}
+
+arch() {
+	case "$(uname -m)" in
+		aarch64 | arm64) echo arm64 ;;
+		armv7l | armv8l) echo arm32 ;;
+		x86_64) echo x86_64 ;;
+		*) return 1 ;;
+	esac
+}
+
+# Soloist API keys: letters, digits and a few separators (not documented in detail - kept loose, but no spaces, quotes
+# or anything a shell or systemd's EnvironmentFile would read)
+valid_key() { [[ "$1" =~ ^[A-Za-z0-9._~+/=-]{16,512}$ ]]; }
+
+installed() { [ -x "${BIN}" ]; }
+
+# "soloist --version": its version and the day it was built (the build expires 90 days later)
+version_line() { installed && timeout 10 "${BIN}" --version 2>/dev/null | head -n 5 | tr '\n' ' '; }
+build_date() {
+	local v d
+	v=$(version_line)
+	d=$(printf '%s' "${v}" | grep -oE '20[0-9]{2}-[0-9]{2}-[0-9]{2}([T ][0-9:]{8}Z?)?' | head -n 1)
+	[ -n "${d}" ] && date -u -d "${d}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null
+}
+
+cmd_status() {
+	local v="" built="" expires="" service key_set=false name=""
+	if installed; then
+		v=$(version_line | sed 's/[[:space:]]*$//')
+		built=$(build_date)
+		[ -n "${built}" ] && expires=$(date -u -d "${built} + ${LIFETIME_DAYS} days" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+	fi
+	service=$(systemctl is-active "${UNIT}" 2>/dev/null)
+	if [ -s "${ENV_FILE}" ] && grep -q '^SOLOIST_API_KEY=.' "${ENV_FILE}"; then
+		key_set=true
+		name=$(sed -n 's/^SOLOIST_NAME=//p' "${ENV_FILE}" | head -n 1)
+	fi
+	jq -n --argjson installed "$(installed && echo true || echo false)" --arg version "${v}" --arg built "${built}" \
+		--arg expires "${expires}" --arg service "${service:-unknown}" --argjson keySet "${key_set}" \
+		--arg name "${name}" --argjson port "${WS_PORT}" --arg arch "$(arch || echo unsupported)" '
+		{installed: $installed, version: $version, built: $built, expires: $expires, service: $service,
+		 keySet: $keySet, deviceName: $name, wsPort: $port, arch: $arch}'
+}
+
+# Downloads the build for this box into DIR (only when it differs from the installed one, or with --force). Prints
+# "new" or "same".
+fetch() {
+	local force="$1" a tmp url
+	a=$(arch) || die "Soloist gibt es für diese Architektur ($(uname -m)) nicht."
+	url="${CDN}/soloist_release_${a}.tar.gz"
+	tmp=$(mktemp -d) || die "Kein temporärer Speicher."
+	trap 'rm -rf "${tmp}"' RETURN
+	curl -fsSL --retry 3 --retry-delay 3 -m 300 -o "${tmp}/soloist.tar.gz" "${url}" || die "Soloist ließ sich nicht von Spotify laden (${url})."
+	tar -xzf "${tmp}/soloist.tar.gz" -C "${tmp}" || die "Das Soloist-Archiv ist beschädigt."
+	local new
+	new=$(find "${tmp}" -maxdepth 2 -type f -name soloist | head -n 1)
+	[ -n "${new}" ] && chmod 755 "${new}" && timeout 10 "${new}" --version > /dev/null 2>&1 || die "Die geladene Soloist-Version startet nicht."
+	if [ "${force}" != 1 ] && installed && cmp -s "${new}" "${BIN}"; then
+		echo same
+		return 0
+	fi
+	install -d -m 755 "${DIR}"
+	install -m 755 "${new}" "${BIN}.new" && mv -f "${BIN}.new" "${BIN}" || die "Soloist ließ sich nicht installieren."
+	echo new
+}
+
+units() {
+	install -d -m 755 "${DATA%/*}"
+	install -d -m 750 -o dietpi -g dietpi "${DATA}" "${CACHE}"
+	install -d -m 700 "${SECRETS}"
+	local f changed=0
+	for f in "${UNIT}.service" "${UNIT}-update.service" "${UNIT}-update.timer"; do
+		if ! cmp -s "${APP_DIR}/systemd/${f}" "/etc/systemd/system/${f}"; then
+			install -m 644 "${APP_DIR}/systemd/${f}" "/etc/systemd/system/${f}" || die "Dienst ${f} ließ sich nicht einrichten."
+			changed=1
+		fi
+	done
+	[ "${changed}" = 1 ] && systemctl daemon-reload
+	systemctl enable --now "${UNIT}-update.timer" > /dev/null 2>&1
+	# (the service runs only with a key: ConditionPathExists in the unit)
+	systemctl enable "${UNIT}" > /dev/null 2>&1
+}
+
+cmd_install() {
+	installed || fetch 0 > /dev/null
+	units
+	[ -s "${ENV_FILE}" ] && systemctl restart "${UNIT}" > /dev/null 2>&1
+	if [ "${JSON}" = 1 ]; then cmd_status | jq '{ok: true} + .'; else echo "✔ Soloist installiert ($(version_line))."; fi
+}
+
+cmd_update() {
+	local force=0 r
+	[ "$1" = --force ] && force=1
+	# (no key, no Soloist: the weekly timer does not download it for nothing)
+	if [ "${force}" != 1 ] && [ ! -s "${ENV_FILE}" ]; then
+		if [ "${JSON}" = 1 ]; then jq -n '{ok: true, updated: false, keySet: false}'; else echo "Kein API-Key hinterlegt – nichts zu tun."; fi
+		return 0
+	fi
+	r=$(fetch "${force}") || {
+		# (fetch's error, as die wrote it - JSON on stdout or text on stderr)
+		[ -n "${r}" ] && printf '%s\n' "${r}"
+		exit 1
+	}
+	if [ "${r}" = new ] && [ -s "${ENV_FILE}" ]; then
+		systemctl reset-failed "${UNIT}" > /dev/null 2>&1
+		systemctl restart "${UNIT}" > /dev/null 2>&1
+	fi
+	if [ "${JSON}" = 1 ]; then
+		cmd_status | jq --arg r "${r}" '{ok: true, updated: ($r == "new")} + .'
+	elif [ "${r}" = new ]; then
+		echo "✔ Neue Soloist-Version installiert ($(version_line))."
+	else
+		echo "✔ Soloist ist aktuell ($(version_line))."
+	fi
+}
+
+cmd_set_key() {
+	local key name
+	IFS= read -r key || true
+	key="${key//[[:space:]]/}"
+	valid_key "${key}" || die "Der API-Key ist ungültig." 2
+	installed || fetch 0 > /dev/null
+	units
+	# the name in the Spotify app's device list: the box's name, so it is told apart from the browser player
+	name="$(hostname) (Soloist)"
+	install -d -m 700 "${SECRETS}"
+	(
+		umask 077
+		printf 'SOLOIST_API_KEY=%s\nSOLOIST_NAME=%s\n' "${key}" "${name}" > "${ENV_FILE}.new"
+	) && mv -f "${ENV_FILE}.new" "${ENV_FILE}" || die "Der Key ließ sich nicht speichern."
+	jq -n --arg name "${name}" '{name: $name}' > "${INFO}.new" && chmod 644 "${INFO}.new" && mv -f "${INFO}.new" "${INFO}"
+	systemctl reset-failed "${UNIT}" > /dev/null 2>&1
+	systemctl restart "${UNIT}" > /dev/null 2>&1 || die "Soloist startet nicht."
+	if [ "${JSON}" = 1 ]; then cmd_status | jq '{ok: true} + .'; else echo "✔ Key gespeichert, Soloist läuft als '${name}'."; fi
+}
+
+cmd_remove_key() {
+	systemctl stop "${UNIT}" > /dev/null 2>&1
+	rm -f "${ENV_FILE}" "${INFO}"
+	if [ "${JSON}" = 1 ]; then jq -n '{ok: true}'; else echo "✔ Key gelöscht, Soloist angehalten."; fi
+}
+
+cmd_restart() {
+	[ -s "${ENV_FILE}" ] || die "Kein API-Key hinterlegt."
+	systemctl reset-failed "${UNIT}" > /dev/null 2>&1
+	systemctl restart "${UNIT}" > /dev/null 2>&1 || die "Soloist startet nicht."
+	if [ "${JSON}" = 1 ]; then jq -n '{ok: true}'; else echo "✔ Soloist neu gestartet."; fi
+}
+
+[ "$(id -u)" = 0 ] || [ -n "${KN_SOLOIST_TEST}" ] || die "Bitte als root starten (sudo)."
+command -v jq > /dev/null || die "jq fehlt."
+
+CMD="${1:-status}"
+shift || true
+ARGS=()
+for a in "$@"; do
+	if [ "${a}" = --json ]; then JSON=1; else ARGS+=("${a}"); fi
+done
+case "${CMD}" in
+	status)
+		if [ "${JSON}" = 1 ]; then
+			cmd_status
+		else
+			cmd_status | jq -r 'if .installed then "Soloist: \(.version)\nGebaut:  \(.built)\nGültig bis: \(.expires)\nDienst:  \(.service)\nKey:     \(if .keySet then "hinterlegt (\(.deviceName))" else "fehlt" end)" else "Soloist ist nicht installiert." end'
+		fi
+		;;
+	install) cmd_install ;;
+	update) cmd_update "${ARGS[@]}" ;;
+	set-key) cmd_set_key ;;
+	remove-key) cmd_remove_key ;;
+	restart) cmd_restart ;;
+	-h | --help | help) sed -n '3,10p' "$0" | sed 's/^# \{0,1\}//' ;;
+	*) die "Unbekannter Befehl: ${CMD}" 2 ;;
+esac

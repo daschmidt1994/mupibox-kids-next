@@ -1,0 +1,29 @@
+[Unit]
+Description=MuPiBox Kids Next: Spotify Soloist (Spotify ohne Browser)
+Documentation=https://developer.spotify.com/documentation/soloist
+After=network-online.target sound.target pulseaudio.service
+Wants=network-online.target
+# only with the parents' API key (Eltern-App › Spotify › Soloist, or mupi-kn-soloist set-key)
+ConditionPathExists=/etc/mupibox-kn/secrets/soloist.env
+ConditionPathExists=/opt/mupibox-kn/soloist/soloist
+# a build that expired (exit code 10) or does not start: a newer one from Spotify (mupi-kn-soloist update)
+OnFailure=mupi-kn-soloist-update.service
+
+[Service]
+User=dietpi
+Group=dietpi
+SupplementaryGroups=audio pulse-access
+# the box's PulseAudio runs system-wide
+Environment=PULSE_SERVER=unix:/var/run/pulse/native
+EnvironmentFile=/etc/mupibox-kn/secrets/soloist.env
+# --initial-volume 100: the box sets the volume itself (amixer, the volume buttons); Soloist's own stays at full
+ExecStart=/opt/mupibox-kn/soloist/soloist --device-name ${SOLOIST_NAME} --api-key ${SOLOIST_API_KEY} \
+	--data-dir /var/lib/mupibox-kn/soloist --cache-dir /var/cache/mupibox-kn/soloist --cache-size 300 \
+	--ws 127.0.0.1:9095 --initial-volume 100
+Restart=on-failure
+RestartSec=10
+RestartPreventExitStatus=10
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

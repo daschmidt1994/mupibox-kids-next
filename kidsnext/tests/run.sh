@@ -22,7 +22,7 @@ for t in "${KN}"/tests/test_*.sh; do
 done
 
 echo "== shellcheck"
-mapfile -t SCRIPTS < <(find "${KN}" -name '*.sh' -not -path '*/tests/*'; find "${KN}/backup" "${KN}/netbird" "${KN}/hardware" -type f -name 'mupi-kn-*' 2>/dev/null)
+mapfile -t SCRIPTS < <(find "${KN}" -name '*.sh' -not -path '*/tests/*'; find "${KN}/backup" "${KN}/netbird" "${KN}/soloist" "${KN}/hardware" -type f -name 'mupi-kn-*' 2>/dev/null)
 if command -v shellcheck >/dev/null; then
 	if out=$(shellcheck -x -S warning "${SCRIPTS[@]}" 2>&1); then ok "shellcheck (${#SCRIPTS[@]} Dateien)"; else nok "shellcheck" "${out}"; fi
 else

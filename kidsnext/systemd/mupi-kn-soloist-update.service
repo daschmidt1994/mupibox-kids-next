@@ -1,0 +1,9 @@
+[Unit]
+Description=MuPiBox Kids Next: neueste Spotify-Soloist-Version laden
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mupi-kn-soloist update
+Nice=10
