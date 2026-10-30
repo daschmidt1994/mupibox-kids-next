@@ -2219,7 +2219,7 @@ async function ownDeviceForStart() {
     if (solo) return solo
   } catch (err) {
     if (isSpotify429(err, 'ownDeviceForStart')) throw err
-    log.debug(`${now()}: [Spotify Control] Soloist not looked for: ${err}`)
+    console.warn(`${now()}: [Spotify Control] Soloist not looked for: ${err?.statusCode ?? ''} ${err?.message ?? err}`)
   }
   if (displaySpotifyDevice) return displaySpotifyDevice
   const name = config?.['node-sonos-http-api']?.server || muPiBoxConfig?.mupibox?.host
@@ -3497,7 +3497,7 @@ app.get('/soloist', async (_req, res) => {
     try {
       await soloistDeviceForStart()
     } catch (err) {
-      if (!isSpotify429(err, 'soloist')) log.debug(`${now()}: [Spotify Control] Soloist not looked for: ${err}`)
+      if (!isSpotify429(err, 'soloist')) console.warn(`${now()}: [Spotify Control] Soloist not looked for: ${err?.statusCode ?? ''} ${err?.message ?? err}`)
     }
   }
   const name = soloistName()
