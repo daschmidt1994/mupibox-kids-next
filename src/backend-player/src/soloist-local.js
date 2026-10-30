@@ -293,10 +293,12 @@ async function play(options = {}, retried = false) {
     await command({ command: 'play' })
     return { body: {} }
   }
-  const started = waitFor(hasTrack, 8000)
+  // (a track came 0.2 s after the play; a restart and its login take about 2 s - waiting 8 s made the children wait 10 s
+  // for the first play after the box was switched on)
+  const started = waitFor(hasTrack, 4000)
   await command({ command: 'play', uri })
   // (seen after a start of the box: Soloist logged in, took the album, said "playing" - and resolved no track, until it
-  // was restarted)
+  // was restarted; seen again with the clock synchronised, the first play 75 s after its login)
   if (!(await started)) {
     if (!retried && (await restartSoloist())) return play(options, true)
     throw Object.assign(new Error('Soloist started no track'), { soloist: true })
