@@ -3535,6 +3535,7 @@ app.get('/playing', (_req, res) => {
 
 // KN: Soloist for the app's page (Einstellungen › Spotify › Soloist): running, found among the account's devices, used
 app.get('/soloist', async (_req, res) => {
+  if (soloistName() && soloistLocal.ready()) return res.json({ running: true, name: soloistName(), deviceId: soloistLocal.LOCAL_DEVICE_ID, known: true, inUse: true })
   // (not found yet: looked for now - at most once a minute, the page asks every 10 s while it waits for the coupling)
   if (soloistName() && !soloistDevice && !spotifyBlockedUntil()) {
     try {
@@ -3544,6 +3545,8 @@ app.get('/soloist', async (_req, res) => {
     }
   }
   const name = soloistName()
+  // (logged in through its local control: paired, and the box plays there)
+  if (name && soloistLocal.ready()) return res.json({ running: true, name, deviceId: soloistLocal.LOCAL_DEVICE_ID, known: true, inUse: true })
   res.json({ running: !!name, name, deviceId: name ? soloistDevice : null, known: name ? soloistKnown : null, inUse: !!soloistDevice && activeDevice === soloistDevice })
 })
 // (a new key, or none: looked for anew at the next start)

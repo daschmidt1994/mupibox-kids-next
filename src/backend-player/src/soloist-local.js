@@ -82,7 +82,8 @@ function onMessage(m) {
       break
     }
     case 'playback_state':
-      state = { ...m }
+      // (an item already known keeps what a shorter message leaves out - seen: only uri and name after a pause)
+      state = { ...m, item: sameItem(state?.item, m.item) }
       delete state.type
       stateAt = Date.now()
       try {
@@ -94,7 +95,7 @@ function onMessage(m) {
       stateAt = Date.now()
       break
     case 'track_changed':
-      if (state) state.item = m.item
+      if (state) state.item = sameItem(state.item, m.item)
       break
     case 'playback_changed':
       if (state) state.status = m.status
@@ -112,6 +113,18 @@ function onMessage(m) {
       if (state) state.options = m.options
       break
   }
+}
+
+// the new item, completed by the old one's details when it is the same (deeply: decorations, parent, playback)
+function sameItem(old, item) {
+  if (!old || !item || uriOf(old) !== uriOf(item)) return item
+  const merge = (a, b) => {
+    if (!a || typeof a !== 'object' || Array.isArray(a) || !b || typeof b !== 'object' || Array.isArray(b)) return b ?? a
+    const out = { ...a }
+    for (const k of Object.keys(b)) out[k] = merge(a[k], b[k])
+    return out
+  }
+  return merge(old, item)
 }
 
 function send(cmd) {
@@ -159,30 +172,55 @@ const uriOf = (x) => (typeof x === 'string' ? x : (x?.uri ?? ''))
 const kindOf = (uri) => String(uri).split(':')[1] ?? ''
 const idOf = (uri) => String(uri).split(':')[2] ?? ''
 
+// Soloist's entities (seen 30.10.2026): { uri, entity_type, decorations: { identity: { name }, visual_identity: { cover:
+// [{ url, size }] } }, parent: { entity }, creators: [{ entity }], playback: { duration_ms } }
+const nameOf = (e) => e?.decorations?.identity?.name ?? e?.name ?? ''
+const SIZES = { xlarge: 640, large: 640, default: 300, small: 64 }
+const imagesOf = (e) =>
+  (e?.decorations?.visual_identity?.cover ?? e?.images ?? [])
+    .filter((c) => c?.url)
+    .map((c) => ({ url: c.url, height: c.height ?? SIZES[c.size] ?? 300, width: c.width ?? SIZES[c.size] ?? 300 }))
+    .sort((x, y) => y.height - x.height)
+
 /** Soloist's state in the Web API's shape (GET /me/player), or an empty object while nothing is known. */
 function webState() {
   if (!state) return {}
-  const item = state.item ? { ...state.item } : null
-  if (item) {
-    const uri = uriOf(item)
-    item.uri ??= uri
-    item.id ??= idOf(uri)
-    item.type ??= kindOf(uri) || 'track'
-    item.duration_ms ??= item.duration ?? item.length_ms
+  const raw = state.item
+  let item = null
+  if (raw) {
+    const uri = uriOf(raw)
+    const type = raw.entity_type ?? (kindOf(uri) || 'track')
+    const parent = raw.parent?.entity ?? null
+    const ctx = state.context?.uri === uriOf(parent) ? state.context : null
+    const images = imagesOf(raw).length ? imagesOf(raw) : imagesOf(parent).length ? imagesOf(parent) : imagesOf(ctx)
+    const artists = (raw.creators ?? []).map((c) => ({ id: idOf(uriOf(c.entity)), uri: uriOf(c.entity), name: nameOf(c.entity) }))
+    const album = parent ? { id: idOf(uriOf(parent)), uri: uriOf(parent), name: nameOf(parent), images, artists } : { name: '', images, artists }
+    item = {
+      id: idOf(uri),
+      uri,
+      type,
+      name: nameOf(raw),
+      duration_ms: raw.playback?.duration_ms ?? raw.duration_ms ?? 0,
+      artists,
+      album,
+      // (an episode's show, as the Web API names it)
+      ...(type === 'episode' ? { show: { id: album.id, uri: album.uri, name: album.name, images } } : {}),
+      images,
+    }
   }
-  const playing = state.status === 'playing'
   const pos = state.position ?? {}
+  const playing = state.status === 'playing'
   let progress = typeof pos.position_ms === 'number' ? pos.position_ms : 0
-  if (playing && typeof pos.timestamp_ms === 'number') progress += Math.max(0, Date.now() - pos.timestamp_ms) * (pos.speed ?? 1)
-  else if (playing) progress += Date.now() - stateAt
+  if (playing && typeof pos.timestamp_ms === 'number') progress += Math.max(0, Date.now() - pos.timestamp_ms) * (pos.speed || 1)
   if (item?.duration_ms) progress = Math.min(progress, item.duration_ms)
   const ctxUri = uriOf(state.context)
   const o = state.options ?? {}
+  const repeat = o.repeat === 'track' || o.repeat_track ? 'track' : o.repeat === 'context' || o.repeat_context ? 'context' : 'off'
   return {
     device: { id: LOCAL_DEVICE_ID, name: deviceName, is_active: state.is_active !== false, type: 'Speaker', volume_percent: state.volume },
-    shuffle_state: o.shuffle === true || o.shuffling === true,
-    repeat_state: o.repeat_track ? 'track' : o.repeat_context ? 'context' : 'off',
-    context: ctxUri ? { uri: ctxUri, type: kindOf(ctxUri) } : null,
+    shuffle_state: o.shuffle === true,
+    repeat_state: repeat,
+    context: ctxUri ? { uri: ctxUri, type: state.context?.entity_type ?? kindOf(ctxUri) } : null,
     progress_ms: Math.round(progress),
     is_playing: playing,
     item,
@@ -236,4 +274,6 @@ module.exports = {
   api,
   webState,
   deviceName: () => deviceName,
+  // (for trying the mapping with a recorded message)
+  _message: onMessage,
 }
