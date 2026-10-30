@@ -19,6 +19,9 @@ EnvironmentFile=/etc/mupibox-kn/secrets/soloist.env
 # the network first (at most a minute): started before the Wi-Fi (USB stick) was up, Soloist announced itself on no
 # network - the Spotify apps did not see it and it could not be paired (Julia's box, 30.10.2026)
 ExecStartPre=/bin/sh -c 'for i in $(seq 60); do ip -4 route show default | grep -q . && exit 0; sleep 1; done; exit 0'
+# and the right time (the box has no clock of its own: after a start it runs on the time it was switched off with until
+# NTP sets it - at most another 30 s)
+ExecStartPre=/bin/sh -c 'for i in $(seq 30); do [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = yes ] && exit 0; sleep 1; done; exit 0'
 # --initial-volume 100: the box sets the volume itself (amixer, the volume buttons); Soloist's own stays at full
 ExecStart=/opt/mupibox-kn/soloist/soloist --device-name ${SOLOIST_NAME} --api-key ${SOLOIST_API_KEY} \
 	--data-dir /var/lib/mupibox-kn/soloist --cache-dir /var/cache/mupibox-kn/soloist --cache-size 300 \

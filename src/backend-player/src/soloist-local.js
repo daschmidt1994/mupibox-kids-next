@@ -7,6 +7,7 @@
 // before. The shapes Soloist sends are mapped to the Web API's (the player and the display know those).
 
 const fs = require('node:fs')
+const { execFile } = require('node:child_process')
 
 const DATA = '/var/lib/mupibox-kn/soloist'
 // (the last state as Soloist sent it, for looking at on the box)
@@ -266,15 +267,38 @@ function sdkState() {
  * Starts what the Web API's play would (context_uri / uris, offset.position, position_ms) - or resumes without either.
  * Soloist's play takes no offset: the album is started and skipped forward to the track, then sought.
  */
-async function play(options = {}) {
+// a track of its own in Soloist's message (an empty item: it took the album but resolved no track)
+const hasTrack = (m) => (m?.type === 'track_changed' || m?.type === 'playback_state') && !!uriOf(m.item)
+
+// Soloist restarted (sudo: the player runs as dietpi, who may), and logged in again (its stored session) - at most
+// once in 2 minutes
+let restartedAt = 0
+async function restartSoloist() {
+  if (Date.now() - restartedAt < 120000) return false
+  restartedAt = Date.now()
+  log.info(`${new Date().toLocaleString()}: [Soloist] took the album but started no track - restarted`)
+  await new Promise((resolve) => execFile('sudo', ['-n', 'systemctl', 'restart', 'mupi-kn-soloist'], { timeout: 30000 }, () => resolve()))
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 500))
+    if (module.exports.ready()) return true
+  }
+  return false
+}
+
+async function play(options = {}, retried = false) {
   const uri = options.context_uri || options.uris?.[0]
   if (!uri) {
     await command({ command: 'play' })
     return { body: {} }
   }
-  const started = waitFor((m) => m?.type === 'track_changed' || m?.type === 'playback_state', 6000)
+  const started = waitFor(hasTrack, 8000)
   await command({ command: 'play', uri })
-  await started
+  // (seen after a start of the box: Soloist logged in, took the album, said "playing" - and resolved no track, until it
+  // was restarted)
+  if (!(await started)) {
+    if (!retried && (await restartSoloist())) return play(options, true)
+    throw Object.assign(new Error('Soloist started no track'), { soloist: true })
+  }
   const skips = Math.max(0, Math.min(200, Number(options.offset?.position) || 0))
   for (let i = 0; i < skips; i++) {
     const changed = waitFor((m) => m?.type === 'track_changed', 3000)
