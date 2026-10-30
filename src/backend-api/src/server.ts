@@ -597,9 +597,12 @@ const SOLOIST_HEAD = `<script>(function () {
 })();</script>`
 
 // KN: tapping the covers (Daniel: a tap on a cover not quite in the middle was taken as a swipe - the children could not
-// open it). Swiper counted a finger that moved by 5 px as a swipe: now 20 px. And a side cover opens at once, as the one
-// in the middle (before it only came to the middle): it is brought there without animation and the tap is handed on at
-// its centre, so the display's own code (slideClicked) opens it. Its hit test as there: nearer covers lie on top.
+// open it). A finger that moves a little is no swipe yet: up to 20 px (before 8 px on the stage, 5 px in Swiper). And
+// a side cover opens at once, as the one in the middle (before it only came to the middle).
+// - the stage (km themes and others with kmTheme.stage, e.g. Jakob's and Julia's box): the moves up to 20 px do not reach
+//   its stageMove; after the tap on a side cover has brought it to the middle (kmStageTap), the tap is handed on to it.
+// - Cover Flow (Swiper): its threshold; the side cover is brought to the middle without animation and the tap handed on
+//   at its centre, so the display's own code (slideClicked) opens it. Its hit test as there: nearer covers lie on top.
 const TAP_HEAD = `<script>(function () {
   function tune() {
     var all = document.querySelectorAll('swiper-container');
@@ -609,8 +612,34 @@ const TAP_HEAD = `<script>(function () {
     }
   }
   setInterval(tune, 1000);
+  var down = null;
+  document.addEventListener('pointerdown', function (e) { down = { x: e.clientX, y: e.clientY, far: false }; }, true);
+  document.addEventListener('pointermove', function (e) {
+    if (!down || down.far || !e.target || !e.target.closest || !e.target.closest('.km-stage')) return;
+    if (Math.abs(e.clientX - down.x) > 20 || Math.abs(e.clientY - down.y) > 20) down.far = true;
+    else e.stopPropagation();
+  }, true);
+  function middle() {
+    var best = null, z = -1e9, all = document.querySelectorAll('.km-stage-item');
+    for (var i = 0; i < all.length; i++) {
+      var v = parseInt(all[i].style.zIndex, 10) || 0;
+      if (v > z) { z = v; best = all[i]; }
+    }
+    return best;
+  }
   document.addEventListener('click', function (e) {
     if (e.__kn) return;
+    var item = e.target && e.target.closest && e.target.closest('.km-stage-item');
+    // (not after a swipe: a cover pulled to the middle with the finger on it stays closed)
+    if (item) {
+      if (down && down.far) return;
+      var mid = middle();
+      if (mid && mid !== item) setTimeout(function () {
+        var now = middle();
+        if (now === item) { var t = new MouseEvent('click', { bubbles: true, cancelable: true }); t.__kn = true; item.dispatchEvent(t); }
+      }, 60);
+      return;
+    }
     var box = e.target && e.target.closest && e.target.closest('swiper-container.coverflow');
     var sw = box && box.swiper;
     // (the click after a real swipe: Swiper drops it itself)
