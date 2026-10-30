@@ -645,6 +645,14 @@ let displaySpotifyDevice = null // the display's Web Playback SDK device, as rep
 let displayDeviceReportedAt = 0 // when the display last reported it (see playOnDevice)
 let displayRecoveryAt = 0 // when the display was last asked to sign in to Spotify anew
 
+// KN: Soloist's local control (soloist-local.js): logged in, it plays, pauses, skips and tells the state - without
+// Spotify's Web API, so a block of the Web API (about 100 requests a day) does not keep the children from listening
+const soloistLocal = require('./soloist-local')
+// the Spotify commands go there while it is ready, else to the Web API
+const spotifyCtl = () => (soloistLocal.ready() ? soloistLocal.api : spotifyApi)
+// Spotify's block of the Web API stops a command only when it would go there
+const webBlocked = () => (soloistLocal.ready() ? 0 : spotifyBlockedUntil())
+
 // KN: Spotify Soloist (kidsnext/soloist/mupi-kn-soloist) - Spotify's own player without a browser, with the parents'
 // API key. Running, it is the box's Spotify player; the display's (Web Playback SDK) is kept as the fallback. Spotify
 // lists it for the account once it was chosen in a Spotify app (its pairing); it is found there by its name.
@@ -1237,7 +1245,7 @@ async function spotifyGraceCheck() {
     return
   }
   if (Date.now() < spotifyGraceNextAt) return
-  if (spotifyBlockedUntil()) {
+  if (webBlocked()) {
     // (not asked: counted as a miss - "stop unless a podcast episode" stops then; the others end with the parents'
     // maximum time)
     spotifyGraceMissed('Spotify blocks the requests')
@@ -1249,7 +1257,7 @@ async function spotifyGraceCheck() {
   // (the next poll: an answer below sets it from the song's time left; a failed one is tried again soon)
   let nextInMs = SPOTIFY_GRACE_RETRY_MS
   try {
-    const { body } = await spotifyApi.getMyCurrentPlaybackState({ additional_types: 'episode,track' })
+    const { body } = await spotifyCtl().getMyCurrentPlaybackState({ additional_types: 'episode,track' })
     const item = body?.item
     if (!item) {
       spotifyGraceMissed('nothing reported')
@@ -1851,6 +1859,8 @@ function pauseOwnSpotify(why) {
   // name it signs in with: the box's host name, see set_hostname.sh)
   const ownName = muPiBoxConfig?.mupibox?.host
   const notOwn = (message, extra = {}) => Object.assign(new Error(message), { notOwn: true }, extra)
+  // (KN: Soloist pauses itself - only what it plays, never a phone of the account)
+  if (soloistLocal.ready()) return soloistLocal.api.pause()
   if (spotifyBlockedUntil()) return Promise.reject(notOwn('Spotify blocks the requests', { blocked: true }))
   const generation = playbackGeneration
   // (asked first which device plays: a device id in the pause alone is not a promise that Spotify leaves the others be)
@@ -2032,15 +2042,14 @@ function stop() {
 function play() {
   forgetSpotifyState()
   if (currentMeta.currentPlayer === 'spotify') {
-    if (spotifyBlockedUntil()) return log.debug(`${now()}: [Spotify Control] play: Spotify blocks the requests`)
+    if (webBlocked()) return log.debug(`${now()}: [Spotify Control] play: Spotify blocks the requests`)
     // (only a play that is really sent takes back a pause the display still has to make: one refused in a block let
     // the music go on)
     currentMeta.spotifySilenceAt = 0
     // (only on the box's own player - without a device Spotify went on on the account's active one, a phone)
     const asked = ++playPauseRequest
     const generation = playbackGeneration
-    ownDeviceForStart()
-      .then((own) => {
+    ;(soloistLocal.ready() ? soloistLocal.api.play() : ownDeviceForStart().then((own) => {
         // (while the device was looked for: a pause, a stop, another start, a limit or a block - the play is not made,
         // it started the music again, uncounted after a stop)
         const overtaken =
@@ -2053,7 +2062,7 @@ function play() {
         if (!own) throw new Error("The box's Spotify player is not known - not played")
         activeDevice = activeDevice || own
         return spotifyApi.play({ device_id: activeDevice })
-      })
+      }))
       .then(
         () => {
           counter.countplay++
@@ -2104,8 +2113,8 @@ function play() {
 function next() {
   forgetSpotifyState()
   if (currentMeta.currentPlayer === 'spotify') {
-    if (spotifyBlockedUntil()) return log.debug(`${now()}: [Spotify Control] next: Spotify blocks the requests`)
-    spotifyApi.skipToNext(ownSpotifyDeviceOptions()).then(
+    if (webBlocked()) return log.debug(`${now()}: [Spotify Control] next: Spotify blocks the requests`)
+    spotifyCtl().skipToNext(ownSpotifyDeviceOptions()).then(
       () => {
         counter.countskipToNext++
         if (config.server.logLevel === 'debug') {
@@ -2131,8 +2140,8 @@ function next() {
 function previous() {
   forgetSpotifyState()
   if (currentMeta.currentPlayer === 'spotify') {
-    if (spotifyBlockedUntil()) return log.debug(`${now()}: [Spotify Control] previous: Spotify blocks the requests`)
-    spotifyApi.skipToPrevious(ownSpotifyDeviceOptions()).then(
+    if (webBlocked()) return log.debug(`${now()}: [Spotify Control] previous: Spotify blocks the requests`)
+    spotifyCtl().skipToPrevious(ownSpotifyDeviceOptions()).then(
       () => {
         counter.countskipToPrevious++
         if (config.server.logLevel === 'debug') {
@@ -2177,8 +2186,8 @@ function jumpToTrack(targetPosition) {
 
 function shuffleon() {
   forgetSpotifyState()
-  if (spotifyBlockedUntil()) return
-  spotifyApi.setShuffle(true, ownSpotifyDeviceOptions()).then(
+  if (webBlocked()) return
+  spotifyCtl().setShuffle(true, ownSpotifyDeviceOptions()).then(
     () => {
       counter.countsetShuffle++
       if (config.server.logLevel === 'debug') {
@@ -2194,8 +2203,8 @@ function shuffleon() {
 
 function shuffleoff() {
   forgetSpotifyState()
-  if (spotifyBlockedUntil()) return
-  spotifyApi.setShuffle(false, ownSpotifyDeviceOptions()).then(
+  if (webBlocked()) return
+  spotifyCtl().setShuffle(false, ownSpotifyDeviceOptions()).then(
     () => {
       counter.countsetShuffle++
       if (config.server.logLevel === 'debug') {
@@ -2267,7 +2276,9 @@ async function playOnDevice(playOptions) {
   forgetSpotifyState()
   const generation = playbackGeneration
   // (overtaken also by a block of Spotify's requests set while waiting for the display - asked again it only grew)
-  const overtaken = () => generation !== playbackGeneration || isPlaybackBlocked() || !!spotifyBlockedUntil()
+  const overtaken = () => generation !== playbackGeneration || isPlaybackBlocked() || !!webBlocked()
+  // KN: Soloist's local control starts it (no device, no Web API)
+  if (soloistLocal.ready()) return soloistLocal.api.play(playOptions)
   if (!playOptions.device_id) {
     const own = await ownDeviceForStart()
     if (overtaken()) throw overtakenStart()
@@ -2314,7 +2325,7 @@ async function playOnDevice(playOptions) {
 
 function playMe() {
   log.debug(`${now()}: [Spotify Control] Spotify play ${currentMeta.activeSpotifyId}`)
-  if (spotifyBlockedUntil()) {
+  if (webBlocked()) {
     // (Spotify blocks the requests: a start would only make the block longer - a new one is refused before anything
     // changes, see useSpotify; a recovery or a repeat is not made)
     log.debug(`${now()}: [Spotify Control] Spotify start not sent: Spotify blocks the requests`)
@@ -3035,9 +3046,9 @@ function seek(progress) {
   let targetProgress = 0
   log.debug(`${now()}: [Spotify Control] Setting progress to ${progress}`)
   if (currentMeta.currentPlayer === 'spotify') {
-    if (spotifyBlockedUntil()) return
+    if (webBlocked()) return
     if (progress > 1) {
-      spotifyApi.seek(progress, ownSpotifyDeviceOptions()).then(
+      spotifyCtl().seek(progress, ownSpotifyDeviceOptions()).then(
         () => {
           counter.countseek++
           if (config.server.logLevel === 'debug') {
@@ -3050,7 +3061,7 @@ function seek(progress) {
         },
       )
     } else {
-      spotifyApi
+      spotifyCtl()
         .getMyCurrentPlaybackState()
         .then((data) => {
           counter.countgetMyCurrentPlaybackState++
@@ -3068,7 +3079,7 @@ function seek(progress) {
         })
         .then(
           () => {
-            spotifyApi.seek(targetProgress, ownSpotifyDeviceOptions()).then(
+            spotifyCtl().seek(targetProgress, ownSpotifyDeviceOptions()).then(
               () => {
                 counter.countseek++
                 if (config.server.logLevel === 'debug') {
@@ -3364,7 +3375,7 @@ function downloadTTS(name) {
 async function useSpotify(command) {
   // (Spotify blocks the requests: the start is not made, and what plays now goes on as it was - counted. The state
   // was set for the new start first, and then the music that went on counted as nothing)
-  if (spotifyBlockedUntil()) {
+  if (webBlocked()) {
     log.debug(`${now()}: [Spotify Control] Spotify start refused: Spotify blocks the requests`)
     return
   }
@@ -3454,6 +3465,12 @@ const EMPTY_STATE = () => ({
   currently_playing_type: '',
 })
 app.get('/state', (_req, res) => {
+  // KN: Soloist tells its state itself - no request to Spotify
+  if (currentMeta.currentPlayer === 'spotify' && soloistLocal.ready()) {
+    const state = soloistLocal.webState()
+    res.send(state.item ? state : EMPTY_STATE())
+    return
+  }
   if (currentMeta.currentPlayer === 'spotify') {
     const kept = spotifyStateKept
     const age = kept ? Date.now() - kept.at : Number.POSITIVE_INFINITY
@@ -3727,7 +3744,7 @@ app.use((req, res) => {
 
   // A Spotify start while Spotify blocks the requests: refused before anything changes (the pause flag of what was
   // paused was cleared first - it counted as playing) and said so
-  if (command.name.includes('spotify:') && spotifyBlockedUntil()) {
+  if (command.name.includes('spotify:') && webBlocked()) {
     log.debug(`${now()}: [Spotify Control] Spotify start refused: Spotify blocks the requests`)
     res.status(503).send({ status: 'blocked', error: 'spotify_blocked' })
     return
@@ -3921,3 +3938,5 @@ http
 console.log(
   `${now()}: [mupibox-backend-player] Server started at http://localhost:${config.server.port}`,
 )
+// KN: Soloist's local control, kept connected while Soloist runs (its login is logged always - not only at debug)
+soloistLocal.start({ info: (m) => console.log(m) })
