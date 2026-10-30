@@ -3534,6 +3534,10 @@ app.get('/playing', (_req, res) => {
 })
 
 // KN: Soloist for the app's page (Einstellungen › Spotify › Soloist): running, found among the account's devices, used
+// KN: the display keeps its tiles grey while Soloist gets its restart after the box started (soloist-local warmUp)
+app.get('/soloist/warming', (_req, res) => {
+  res.json({ warming: !!soloistName() && soloistLocal.warming() })
+})
 app.get('/soloist', async (_req, res) => {
   if (soloistName() && soloistLocal.ready()) return res.json({ running: true, name: soloistName(), deviceId: soloistLocal.LOCAL_DEVICE_ID, known: true, inUse: true })
   // (not found yet: looked for now - at most once a minute, the page asks every 10 s while it waits for the coupling)

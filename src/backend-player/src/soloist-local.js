@@ -79,6 +79,9 @@ function onMessage(m) {
       if (loggedIn && !was) {
         log.info(`${new Date().toLocaleString()}: [Soloist] logged in - Spotify plays through Soloist's local control`)
         send({ command: 'get_state' })
+        try {
+          fs.writeFileSync(SEEN, '')
+        } catch {}
         warmUp()
       }
       if (state) state.is_active = m.is_active
@@ -295,19 +298,24 @@ async function restartAndWait() {
 
 // Soloist started with the box hung at its first play, every time (Julia's box: 75 s and 5 min after its login, the
 // clock synchronised, PulseAudio long up) - and played at once after a restart, even when the play came only 95 s after
-// it. So it is restarted once soon after the box started, while nothing plays: the first tap of a child plays at once
-// (before: 6-10 s of silence until the restart in play). Not when a play has already restarted it.
+// it. So it is restarted once right after its first login when the box has just started; the display keeps its tiles
+// grey meanwhile (warming(): the server's display-ready), so the first tap of a child plays at once (before: 6-10 s of
+// silence until the restart in play). Not when a play has already restarted it.
 let warmed = false
+let warmingNow = false
 let busy = 0
 function warmUp() {
   if (warmed || os.uptime() > 600) return
   warmed = true
-  setTimeout(() => {
-    if (busy || restartedAt || state?.status === 'playing' || state?.status === 'buffering') return
-    log.info(`${new Date().toLocaleString()}: [Soloist] restarted once after the box started (its first play hung)`)
-    restartAndWait()
-  }, 15000).unref()
+  if (busy || restartedAt || state?.status === 'playing' || state?.status === 'buffering') return
+  warmingNow = true
+  log.info(`${new Date().toLocaleString()}: [Soloist] restarted once after the box started (its first play hung)`)
+  restartAndWait().finally(() => (warmingNow = false))
 }
+// (true while the box is young and the restart is still to come or running - only where Soloist has logged in before,
+// SEEN; at most until 90 s after the start: a Soloist that does not log in does not keep the tiles grey)
+const SEEN = '/home/dietpi/.mupibox/soloist-seen'
+const warming = () => warmingNow || (!warmed && !restartedAt && os.uptime() <= 90 && fs.existsSync(SEEN))
 
 async function play(options = {}, retried = false) {
   busy++
@@ -364,6 +372,7 @@ module.exports = {
   },
   /** connected and logged in: the player may use the local control */
   ready: () => !!ws && ws.readyState === 1 && loggedIn,
+  warming,
   api,
   webState,
   sdkState,

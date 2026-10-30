@@ -541,6 +541,13 @@ async function displayReady(): Promise<{ ready: boolean; waiting: string[] }> {
   } catch {
     waiting.push('player')
   }
+  if (!waiting.includes('player')) {
+    // (Soloist: restarted once after the box started - its first play hung; see the player's soloist-local warmUp)
+    const soloist = await fetch('http://127.0.0.1:5005/soloist/warming', { signal: AbortSignal.timeout(2000) })
+      .then((r) => r.json() as Promise<{ warming?: boolean }>)
+      .catch(() => ({ warming: false }))
+    if (soloist.warming) waiting.push('soloist')
+  }
   if (!(await hasSink().catch(() => false))) waiting.push('sound')
   const route = await execFileAsync('ip', ['route', 'show', 'default'], { timeout: 3000 }).catch(() => ({ stdout: '' }))
   if (!String(route.stdout).trim()) waiting.push('network')
