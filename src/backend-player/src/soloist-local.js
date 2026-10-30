@@ -7,6 +7,7 @@
 // before. The shapes Soloist sends are mapped to the Web API's (the player and the display know those).
 
 const fs = require('node:fs')
+const os = require('node:os')
 const { execFile } = require('node:child_process')
 
 const DATA = '/var/lib/mupibox-kn/soloist'
@@ -78,6 +79,7 @@ function onMessage(m) {
       if (loggedIn && !was) {
         log.info(`${new Date().toLocaleString()}: [Soloist] logged in - Spotify plays through Soloist's local control`)
         send({ command: 'get_state' })
+        warmUp()
       }
       if (state) state.is_active = m.is_active
       break
@@ -279,6 +281,10 @@ async function restartSoloist() {
   if (Date.now() - restartedAt < 120000) return false
   restartedAt = Date.now()
   log.info(`${new Date().toLocaleString()}: [Soloist] took the album but started no track - restarted`)
+  return restartAndWait()
+}
+
+async function restartAndWait() {
   await new Promise((resolve) => execFile('sudo', ['-n', 'systemctl', 'restart', 'mupi-kn-soloist'], { timeout: 30000 }, () => resolve()))
   for (let i = 0; i < 40; i++) {
     await new Promise((r) => setTimeout(r, 500))
@@ -287,7 +293,32 @@ async function restartSoloist() {
   return false
 }
 
+// Soloist started with the box hung at its first play, every time (Julia's box: 75 s and 5 min after its login, the
+// clock synchronised, PulseAudio long up) - and played at once after a restart, even when the play came only 95 s after
+// it. So it is restarted once soon after the box started, while nothing plays: the first tap of a child plays at once
+// (before: 6-10 s of silence until the restart in play). Not when a play has already restarted it.
+let warmed = false
+let busy = 0
+function warmUp() {
+  if (warmed || os.uptime() > 600) return
+  warmed = true
+  setTimeout(() => {
+    if (busy || restartedAt || state?.status === 'playing' || state?.status === 'buffering') return
+    log.info(`${new Date().toLocaleString()}: [Soloist] restarted once after the box started (its first play hung)`)
+    restartAndWait()
+  }, 15000).unref()
+}
+
 async function play(options = {}, retried = false) {
+  busy++
+  try {
+    return await playNow(options, retried)
+  } finally {
+    busy--
+  }
+}
+
+async function playNow(options = {}, retried = false) {
   const uri = options.context_uri || options.uris?.[0]
   if (!uri) {
     await command({ command: 'play' })
@@ -300,7 +331,7 @@ async function play(options = {}, retried = false) {
   // (seen after a start of the box: Soloist logged in, took the album, said "playing" - and resolved no track, until it
   // was restarted; seen again with the clock synchronised, the first play 75 s after its login)
   if (!(await started)) {
-    if (!retried && (await restartSoloist())) return play(options, true)
+    if (!retried && (await restartSoloist())) return playNow(options, true)
     throw Object.assign(new Error('Soloist started no track'), { soloist: true })
   }
   const skips = Math.max(0, Math.min(200, Number(options.offset?.position) || 0))
