@@ -174,7 +174,9 @@ const kindOf = (uri) => String(uri).split(':')[1] ?? ''
 const idOf = (uri) => String(uri).split(':')[2] ?? ''
 
 // Soloist's entities (seen 30.10.2026): { uri, entity_type, decorations: { identity: { name }, visual_identity: { cover:
-// [{ url, size }] } }, parent: { entity }, creators: [{ entity }], playback: { duration_ms } }
+// [{ url, size }] }, parent: { entity }, creators: [{ entity }], playback: { duration_ms } } } - parent, creators and
+// playback are read in decorations and, in case, next to it
+const deco = (e, key) => e?.decorations?.[key] ?? e?.[key]
 const nameOf = (e) => e?.decorations?.identity?.name ?? e?.name ?? ''
 const SIZES = { xlarge: 640, large: 640, default: 300, small: 64 }
 const imagesOf = (e) =>
@@ -191,17 +193,17 @@ function webState() {
   if (raw) {
     const uri = uriOf(raw)
     const type = raw.entity_type ?? (kindOf(uri) || 'track')
-    const parent = raw.parent?.entity ?? null
+    const parent = deco(raw, 'parent')?.entity ?? null
     const ctx = state.context?.uri === uriOf(parent) ? state.context : null
     const images = imagesOf(raw).length ? imagesOf(raw) : imagesOf(parent).length ? imagesOf(parent) : imagesOf(ctx)
-    const artists = (raw.creators ?? []).map((c) => ({ id: idOf(uriOf(c.entity)), uri: uriOf(c.entity), name: nameOf(c.entity) }))
+    const artists = (deco(raw, 'creators') ?? []).map((c) => ({ id: idOf(uriOf(c.entity)), uri: uriOf(c.entity), name: nameOf(c.entity) }))
     const album = parent ? { id: idOf(uriOf(parent)), uri: uriOf(parent), name: nameOf(parent), images, artists } : { name: '', images, artists }
     item = {
       id: idOf(uri),
       uri,
       type,
       name: nameOf(raw),
-      duration_ms: raw.playback?.duration_ms ?? raw.duration_ms ?? 0,
+      duration_ms: deco(raw, 'playback')?.duration_ms ?? raw.duration_ms ?? 0,
       artists,
       album,
       // (an episode's show, as the Web API names it)
