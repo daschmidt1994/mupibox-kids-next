@@ -13,5 +13,5 @@ kn_module_soloist() {
 		kn_ok "Soloist erneuert"
 		return 0
 	fi
-	kn_ok "Soloist bereit – API-Key in der Eltern-App eintragen (Einstellungen › Spotify › Soloist)"
+	kn_ok "Soloist bereit – API-Key in der Eltern-App eintragen (Bibliothek › Spotify › Soloist)"
 }

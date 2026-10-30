@@ -1,4 +1,4 @@
-// KN: Kids Next - Spotify Soloist in the web app (Einstellungen › Spotify › Soloist): Spotify's own player without a
+// KN: Kids Next - Spotify Soloist in the web app (Bibliothek › Spotify › Soloist): Spotify's own player without a
 // browser, with the parents' own API key.
 //
 // The work is done by kidsnext/soloist/mupi-kn-soloist (as root through sudo): the key goes to the tool on stdin -
