@@ -596,6 +596,45 @@ const SOLOIST_HEAD = `<script>(function () {
   var tries = 0, t = setInterval(function () { if (window.Spotify) patch(window.Spotify); if (++tries > 120) clearInterval(t); }, 500);
 })();</script>`
 
+// KN: tapping the covers (Daniel: a tap on a cover not quite in the middle was taken as a swipe - the children could not
+// open it). Swiper counted a finger that moved by 5 px as a swipe: now 20 px. And a side cover opens at once, as the one
+// in the middle (before it only came to the middle): it is brought there without animation and the tap is handed on at
+// its centre, so the display's own code (slideClicked) opens it. Its hit test as there: nearer covers lie on top.
+const TAP_HEAD = `<script>(function () {
+  function tune() {
+    var all = document.querySelectorAll('swiper-container');
+    for (var i = 0; i < all.length; i++) {
+      var sw = all[i].swiper;
+      if (sw && sw.params && sw.params.threshold !== 20) sw.params.threshold = 20;
+    }
+  }
+  setInterval(tune, 1000);
+  document.addEventListener('click', function (e) {
+    if (e.__kn) return;
+    var box = e.target && e.target.closest && e.target.closest('swiper-container.coverflow');
+    var sw = box && box.swiper;
+    // (the click after a real swipe: Swiper drops it itself)
+    if (!sw || !sw.slides || sw.allowClick === false) return;
+    tune();
+    var cur = sw.activeIndex;
+    var slides = Array.prototype.map.call(sw.slides, function (s, i) { return { s: s, i: i }; })
+      .sort(function (a, b) { return Math.abs(a.i - cur) - Math.abs(b.i - cur); });
+    for (var k = 0; k < slides.length; k++) {
+      var r = slides[k].s.getBoundingClientRect();
+      if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) continue;
+      if (slides[k].i === cur) return;
+      e.stopPropagation();
+      e.preventDefault();
+      sw.slideTo(slides[k].i, 0);
+      var n = sw.slides[slides[k].i].getBoundingClientRect();
+      var c = new MouseEvent('click', { bubbles: true, cancelable: true, clientX: n.left + n.width / 2, clientY: n.top + n.height / 2 });
+      c.__kn = true;
+      box.dispatchEvent(c);
+      return;
+    }
+  }, true);
+})();</script>`
+
 // (in the page's head: the display's start only, as the boot screen's script - not in a preview in a frame)
 const WAKING_HEAD = `<style>
   mupi-swiper, .km-hbtn, ion-buttons[slot="start"] { transition: filter .6s, opacity .6s; }
@@ -679,7 +718,7 @@ if (productionServe) {
       res.setHeader('Cache-Control', 'no-store')
       res.type('html').send(
         html
-          .replace('</head>', displayReadySeen ? `${SOLOIST_HEAD}</head>` : `${SOLOIST_HEAD}${WAKING_HEAD}</head>`)
+          .replace('</head>', displayReadySeen ? `${SOLOIST_HEAD}${TAP_HEAD}</head>` : `${SOLOIST_HEAD}${TAP_HEAD}${WAKING_HEAD}</head>`)
           .replaceAll("url('/api/bootscreen/current-splash')", 'none')
           .replace(
             '<div id="mupi-boot"></div>',
