@@ -38,6 +38,7 @@ import socket
 import struct
 import subprocess
 import requests
+import threading
 import time
 
 def mqtt_publish_ha():
@@ -414,6 +415,38 @@ def mqtt_publish_ha():
     }
     client.publish(mqtt_ha_topic + "/number/" + mqtt_clientId + "_volume/config", json.dumps(volume_info), qos=0)
 
+    # KN: sleep timer, stop/next/previous, hearing protection and the display (on_message below)
+    def entity(component, key, name, icon, **extra):
+        info = {
+            "name": name,
+            "unique_id": mqtt_clientId + '_mupibox_' + key,
+            "availability_topic": mqtt_topic + '/' + mqtt_clientId + '/state',
+            "icon": icon,
+            "platform": "mqtt",
+            "device": {
+                "identifiers": mqtt_clientId + "_mupibox",
+                "name": mqtt_name,
+                "manufacturer": "MuPiBox.de",
+                "model": "Your MuPiBox: " + mupi_host,
+                "sw_version": mupi_version,
+                "configuration_url":"http://" + mupi_host
+            }
+        }
+        info.update(extra)
+        client.publish(mqtt_ha_topic + "/" + component + "/" + mqtt_clientId + "_" + key + "/config", json.dumps(info), qos=0, retain=True)
+
+    base = mqtt_topic + '/' + mqtt_clientId + '/'
+    entity("number", "sleep_timer", "Sleep timer", "mdi:timer-sand", state_topic=base + 'sleep_timer',
+           command_topic=base + 'sleep_timer/set', min=0, max=720, step=5, mode="box", unit_of_measurement="min")
+    entity("sensor", "sleep_timer_ends", "Sleep timer ends", "mdi:power-sleep", state_topic=base + 'sleep_timer_ends',
+           device_class="timestamp", value_template="{{ value if value else None }}")
+    for key, name, icon in (('stop', 'Stop', 'mdi:stop'), ('next', 'Next', 'mdi:skip-next'), ('previous', 'Previous', 'mdi:skip-previous')):
+        entity("button", key, name, icon, command_topic=base + key + '/set', command_template=key)
+    entity("number", "max_volume", "Maximum volume", "mdi:ear-hearing", state_topic=base + 'max_volume',
+           command_topic=base + 'max_volume/set', min=10, max=100, step=1, unit_of_measurement="%")
+    entity("switch", "display", "Display", "mdi:monitor", state_topic=base + 'display', command_topic=base + 'display/set',
+           payload_on="ON", payload_off="OFF")
+
     # Publish SSID
     ssid_info = {
         "name": "WIFI SSID",
@@ -757,7 +790,7 @@ def on_connect(client, userdata, flags, rc):
     print("Connected to MQTT broker with result code: " + str(rc), flush=True)
     if rc != 0:
         return
-    for command in ('power', 'volume', 'reboot', 'pause', 'play', 'take_screenshot'):
+    for command in ('power', 'volume', 'reboot', 'pause', 'play', 'take_screenshot', 'stop', 'next', 'previous', 'sleep_timer', 'max_volume', 'display'):
         client.subscribe(mqtt_topic + '/' + mqtt_clientId + '/' + command + '/set')
     try:
         if mqtt_ha_active:
@@ -908,6 +941,56 @@ def get_screenshot():
         return None
 
 
+SLEEP_TIMER = '/usr/local/bin/mupibox/sleep_timer.sh'
+
+
+# KN: the box's one power-off timer, the same the app, Telegram and Home Assistant set (sleep_timer.sh)
+def sleep_timer_state():
+    try:
+        out = subprocess.run([SLEEP_TIMER, 'status'], capture_output=True, text=True, timeout=10).stdout
+        return json.loads(out)
+    except Exception:
+        return None
+
+
+def publish_sleep_timer():
+    state = sleep_timer_state()
+    if state is None:
+        return
+    # (whole minutes, rounded up: 1 min still shows until the end)
+    client.publish(mqtt_topic + '/' + mqtt_clientId + '/sleep_timer', (int(state.get('remaining_s') or 0) + 59) // 60, qos=0, retain=True)
+    client.publish(mqtt_topic + '/' + mqtt_clientId + '/sleep_timer_ends', state.get('ends_at') or '', qos=0, retain=True)
+
+
+def set_sleep_timer(minutes):
+    # (the script waits until an old countdown has ended - not in paho's thread)
+    args = ['stop'] if minutes == 0 else ['start', str(minutes * 60)]
+    r = subprocess.run([SLEEP_TIMER] + args, capture_output=True, text=True, timeout=120)
+    print("Sleep timer: " + (str(minutes) + " min" if minutes else "stopped") + " (exit " + str(r.returncode) + ")", flush=True)
+    publish_sleep_timer()
+
+
+# the hearing protection as saved now (the app changes it while this runs - jsonconfig is read once at the start)
+def max_volume():
+    try:
+        with open(config) as file:
+            return int(json.load(file)['mupibox'].get('maxVolume', 100))
+    except (OSError, KeyError, TypeError, ValueError):
+        return 100
+
+
+def xset(*args):
+    return subprocess.run(['sudo', '-u', 'dietpi', 'env', 'DISPLAY=:0', 'XAUTHORITY=/home/dietpi/.Xauthority', 'xset'] + list(args),
+                          capture_output=True, text=True, timeout=5)
+
+
+def display_on():
+    try:
+        return 'Monitor is Off' not in xset('q').stdout
+    except Exception:
+        return True
+
+
 def on_message(client, userdata, msg):
     #print("Topic: " + msg.topic)
     #print("Message: " + str(msg.payload.decode("utf-8")))
@@ -926,11 +1009,7 @@ def on_message(client, userdata, msg):
         except ValueError:
             print("Volume: ignoring invalid value")
             return
-        try:
-            max_volume = int(jsonconfig['mupibox'].get('maxVolume', 100))
-        except (KeyError, TypeError, ValueError):
-            max_volume = 100
-        volume = max(0, min(volume, max_volume))
+        volume = max(0, min(volume, max_volume()))
         print("Volume: " + str(volume) + "%")
         subprocess.run(["/usr/bin/pactl", "set-sink-volume", "@DEFAULT_SINK@", str(volume) + "%"], check=False)
     if msg.topic == mqtt_topic + '/' + mqtt_clientId + '/pause/set' and str(msg.payload.decode("utf-8")) == "pause":
@@ -944,6 +1023,38 @@ def on_message(client, userdata, msg):
     if msg.topic == mqtt_topic + '/' + mqtt_clientId + '/take_screenshot/set' and str(msg.payload.decode("utf-8")) == "take_screenshot":
         screenshot = get_screenshot()
         client.publish(mqtt_topic + '/' + mqtt_clientId + '/screenshot', screenshot, qos=0)
+    payload = msg.payload.decode("utf-8").strip()
+    base = mqtt_topic + '/' + mqtt_clientId + '/'
+    for command in ('stop', 'next', 'previous'):
+        if msg.topic == base + command + '/set' and payload == command:
+            print("Button: " + command)
+            requests.get('http://127.0.0.1:5005/' + command + '?src=mqtt', timeout=5)
+    if msg.topic == base + 'sleep_timer/set':
+        try:
+            minutes = int(float(payload))
+        except ValueError:
+            print("Sleep timer: ignoring invalid value")
+            return
+        if 0 <= minutes <= 720:
+            threading.Thread(target=set_sleep_timer, args=(minutes,), daemon=True).start()
+    if msg.topic == base + 'max_volume/set':
+        try:
+            value = int(float(payload))
+        except ValueError:
+            print("Maximum volume: ignoring invalid value")
+            return
+        # (through the app's server: it saves the config and lowers what plays louder)
+        r = requests.post('http://127.0.0.1:8200/api/mqtt/max-volume', json={'value': value}, timeout=10)
+        print("Maximum volume: " + str(value) + "% (" + str(r.status_code) + ")", flush=True)
+        client.publish(base + 'max_volume', max_volume(), qos=0, retain=True)
+    if msg.topic == base + 'display/set' and payload in ('ON', 'OFF'):
+        if payload == 'ON':
+            xset('dpms', 'force', 'on')
+            xset('s', 'reset')
+        else:
+            xset('dpms', 'force', 'off')
+        print("Display: " + payload, flush=True)
+        client.publish(base + 'display', payload, qos=0, retain=True)
 
 def check_server_availability(host, port, retry_interval):
     while True:
@@ -1064,6 +1175,9 @@ def main():
                 client.publish(mqtt_topic + '/' + mqtt_clientId + '/bat_stat', bat_stat, qos=0)
                 client.publish(mqtt_topic + '/' + mqtt_clientId + '/bat_type', bat_type, qos=0)
                 client.publish(mqtt_topic + '/' + mqtt_clientId + '/battery_connected', battery_connected, qos=0)
+                client.publish(mqtt_topic + '/' + mqtt_clientId + '/max_volume', max_volume(), qos=0, retain=True)
+                client.publish(mqtt_topic + '/' + mqtt_clientId + '/display', 'ON' if display_on() else 'OFF', qos=0, retain=True)
+                publish_sleep_timer()
                 send_play_information()
                 # (again every 10 minutes, and at once when the address changed - the USB adapter taking over)
                 if time.monotonic() - systeminfo_at > 600 or route_address()[0] != systeminfo_ip:

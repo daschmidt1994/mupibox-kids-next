@@ -123,6 +123,72 @@ export interface ElternRouterDeps {
   podcastOffline?: PodcastOffline
 }
 
+export interface AudioConfigMutations {
+  maxVolume?: number
+  startupVolume?: number | null
+  btMaxVolume?: number | null
+  loudness?: 'off' | 'soft' | 'strong'
+  playerBack?: 'minimize' | 'stop'
+}
+
+/**
+ * Saves checked audio settings (POST /api/app/audio/config, and the maximum from MQTT: server.ts /api/mqtt/max-volume)
+ * and lowers what plays louder than a lowered maximum.
+ */
+export async function saveAudioConfig(
+  deps: Pick<ElternRouterDeps, 'getMupiboxConfig' | 'updateMupiboxConfig'>,
+  mutations: AudioConfigMutations,
+): Promise<void> {
+  await deps.updateMupiboxConfig((cfg) => {
+    const mb = ((cfg.mupibox as Record<string, unknown> | undefined) ?? {}) as Record<string, unknown>
+    if (mutations.maxVolume !== undefined) mb.maxVolume = mutations.maxVolume
+    if (mutations.btMaxVolume === null) delete mb.btMaxVolume
+    else if (mutations.btMaxVolume !== undefined) mb.btMaxVolume = mutations.btMaxVolume
+    if (mutations.loudness !== undefined) mb.loudness = mutations.loudness
+    if (mutations.playerBack !== undefined) mb.playerBack = mutations.playerBack
+    // The scripts that set the volume at start and shutdown (chromium-autostart.sh, mupi_shutdown.sh,
+    // off_trigger.sh, shutdown_sound.sh) and the admin interface read startVolume: this app's startupVolume alone
+    // had no effect. Both are written; without a fixed value both go, and the scripts leave the volume as it was.
+    if (mutations.startupVolume !== undefined) {
+      if (mutations.startupVolume === null) {
+        delete mb.startupVolume
+        delete mb.startVolume
+      } else {
+        mb.startupVolume = mutations.startupVolume
+        mb.startVolume = mutations.startupVolume
+      }
+    }
+    // Hearing protection also at the start: the scripts set startVolume as it is (pactl), without the maximum - a
+    // start value above it (set before, or the maximum lowered later) made the box start louder than allowed
+    const max = Number(mb.maxVolume)
+    if (Number.isFinite(max) && max > 0) {
+      for (const key of ['startupVolume', 'startVolume']) {
+        const v = Number(mb[key])
+        if (mb[key] !== undefined && mb[key] !== null && Number.isFinite(v) && v > max) mb[key] = max
+      }
+    }
+    cfg.mupibox = mb
+  })
+  // The hearing protection lowered: what plays louder than the new maximum comes down at once (it stayed as loud
+  // until someone touched the volume) - the Bluetooth maximum while Bluetooth audio is on, as /audio/volume does.
+  // In the volume queue, with the maximum as saved by then: an older save finishing late lowers to the newest
+  // maximum, never back up to its own (volume-lock.ts)
+  if (mutations.maxVolume !== undefined || mutations.btMaxVolume !== undefined) {
+    await withVolumeLock(async () => {
+      const mb = (deps.getMupiboxConfig()?.mupibox as Record<string, unknown> | undefined) ?? {}
+      const btMax = volumePercent(mb.btMaxVolume)
+      const cap = btMax !== undefined && (await bluetoothAudio()) ? btMax : (volumePercent(mb.maxVolume) ?? 100)
+      await new Promise<void>((resolve) =>
+        execFile('/usr/bin/amixer', ['sget', 'Master'], { timeout: 3000 }, (err, stdout) => {
+          const now = !err && stdout ? Number.parseInt(stdout.match(/\[(\d+)%\]/)?.[1] ?? '', 10) : Number.NaN
+          if (!Number.isFinite(now) || now <= cap) return resolve()
+          execFile('/usr/bin/amixer', ['sset', 'Master', `${cap}%`], { timeout: 3000 }, () => resolve())
+        }),
+      )
+    })
+  }
+}
+
 /** Build a Set-Cookie header value. HttpOnly + SameSite=Strict; no Secure
  *  flag because the box serves over plain HTTP on LAN. */
 // Keys of the texts shown on the box display (see /display-texts and the box frontend's display-texts.service).
@@ -1342,7 +1408,7 @@ export function createElternApiRouter(deps: ElternRouterDeps): Router {
    */
   router.post('/audio/config', requireSession, requireCsrf, async (req, res) => {
     const body = (req.body as { maxVolume?: unknown; startupVolume?: unknown; btMaxVolume?: unknown; loudness?: unknown; playerBack?: unknown } | undefined) ?? {}
-    const mutations: { maxVolume?: number; startupVolume?: number | null; btMaxVolume?: number | null; loudness?: 'off' | 'soft' | 'strong'; playerBack?: 'minimize' | 'stop' } = {}
+    const mutations: AudioConfigMutations = {}
     if (body.playerBack !== undefined) {
       if (body.playerBack !== 'minimize' && body.playerBack !== 'stop') {
         res.status(400).json({ error: 'playerBack must be minimize or stop' })
@@ -1390,54 +1456,7 @@ export function createElternApiRouter(deps: ElternRouterDeps): Router {
       res.status(400).json({ error: 'no recognised fields in body' })
       return
     }
-    await deps.updateMupiboxConfig((cfg) => {
-      const mb = ((cfg.mupibox as Record<string, unknown> | undefined) ?? {}) as Record<string, unknown>
-      if (mutations.maxVolume !== undefined) mb.maxVolume = mutations.maxVolume
-      if (mutations.btMaxVolume === null) delete mb.btMaxVolume
-      else if (mutations.btMaxVolume !== undefined) mb.btMaxVolume = mutations.btMaxVolume
-      if (mutations.loudness !== undefined) mb.loudness = mutations.loudness
-      if (mutations.playerBack !== undefined) mb.playerBack = mutations.playerBack
-      // The scripts that set the volume at start and shutdown (chromium-autostart.sh, mupi_shutdown.sh,
-      // off_trigger.sh, shutdown_sound.sh) and the admin interface read startVolume: this app's startupVolume alone
-      // had no effect. Both are written; without a fixed value both go, and the scripts leave the volume as it was.
-      if (mutations.startupVolume !== undefined) {
-        if (mutations.startupVolume === null) {
-          delete mb.startupVolume
-          delete mb.startVolume
-        } else {
-          mb.startupVolume = mutations.startupVolume
-          mb.startVolume = mutations.startupVolume
-        }
-      }
-      // Hearing protection also at the start: the scripts set startVolume as it is (pactl), without the maximum - a
-      // start value above it (set before, or the maximum lowered later) made the box start louder than allowed
-      const max = Number(mb.maxVolume)
-      if (Number.isFinite(max) && max > 0) {
-        for (const key of ['startupVolume', 'startVolume']) {
-          const v = Number(mb[key])
-          if (mb[key] !== undefined && mb[key] !== null && Number.isFinite(v) && v > max) mb[key] = max
-        }
-      }
-      cfg.mupibox = mb
-    })
-    // The hearing protection lowered: what plays louder than the new maximum comes down at once (it stayed as loud
-    // until someone touched the volume) - the Bluetooth maximum while Bluetooth audio is on, as /audio/volume does.
-    // In the volume queue, with the maximum as saved by then: an older save finishing late lowers to the newest
-    // maximum, never back up to its own (volume-lock.ts)
-    if (mutations.maxVolume !== undefined || mutations.btMaxVolume !== undefined) {
-      await withVolumeLock(async () => {
-        const mb = (deps.getMupiboxConfig()?.mupibox as Record<string, unknown> | undefined) ?? {}
-        const btMax = volumePercent(mb.btMaxVolume)
-        const cap = btMax !== undefined && (await bluetoothAudio()) ? btMax : (volumePercent(mb.maxVolume) ?? 100)
-        await new Promise<void>((resolve) =>
-          execFile('/usr/bin/amixer', ['sget', 'Master'], { timeout: 3000 }, (err, stdout) => {
-            const now = !err && stdout ? Number.parseInt(stdout.match(/\[(\d+)%\]/)?.[1] ?? '', 10) : Number.NaN
-            if (!Number.isFinite(now) || now <= cap) return resolve()
-            execFile('/usr/bin/amixer', ['sset', 'Master', `${cap}%`], { timeout: 3000 }, () => resolve())
-          }),
-        )
-      })
-    }
+    await saveAudioConfig(deps, mutations)
     res.json({ ok: true, applied: mutations })
   })
 

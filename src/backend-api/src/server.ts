@@ -37,7 +37,7 @@ import { loadSpotifyTokenStore } from './spotify-sync/config-loader'
 import { createSpotifySyncRouter } from './spotify-sync/routes'
 import { startScheduler } from './spotify-sync/scheduler'
 import type { RunSyncDeps } from './spotify-sync/state-machine'
-import { buildElternLandingHandler, createElternApiRouter, registerDisplayNetworkRoutes, setOnSpotifyCacheCleared } from './eltern/routes'
+import { buildElternLandingHandler, createElternApiRouter, registerDisplayNetworkRoutes, saveAudioConfig, setOnSpotifyCacheCleared } from './eltern/routes'
 import { startSpotifyLoginWatch } from './eltern/spotify-auth-age'
 import { startTlsWatch } from './eltern/tls'
 import { startWeeklySummary } from './eltern/weekly-summary'
@@ -726,6 +726,23 @@ app.get('/api/soloist/state', localOnly, async (_req, res) => {
 app.post('/api/spotify-budget/note', localOnly, (req, res) => {
   noteSpotifyRequests(Number((req.body as { n?: unknown } | undefined)?.n) || 0)
   res.json({ ok: true })
+})
+
+// KN: the hearing protection (maximum volume) set from MQTT (scripts/mqtt/mqtt.py) - saved as the app saves it, so
+// mqtt.py never writes the config the server writes too. Only from the box itself.
+app.post('/api/mqtt/max-volume', localOnly, async (req, res) => {
+  const v = Number((req.body as { value?: unknown } | undefined)?.value)
+  if (!Number.isFinite(v) || v < 10 || v > 100) {
+    res.status(400).json({ error: 'value must be a number between 10 and 100' })
+    return
+  }
+  try {
+    await saveAudioConfig({ getMupiboxConfig: getMupiboxConfigSync, updateMupiboxConfig }, { maxVolume: Math.floor(v) })
+    console.log(`${new Date().toLocaleString()}: [mqtt] maximum volume set to ${Math.floor(v)} %`)
+    res.json({ ok: true, maxVolume: Math.floor(v) })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
 })
 
 // We explicitely check for !== 'development' for now so we do not need to set this env in
