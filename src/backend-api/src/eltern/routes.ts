@@ -2607,7 +2607,7 @@ export function createElternApiRouter(deps: ElternRouterDeps): Router {
       res.status(400).json({ error: 'invalid MAC' })
       return
     }
-    const r = await execCapture('sudo', ['-u', 'dietpi', '/usr/local/bin/mupibox/pair_bt.sh', mac], 30000)
+    const r = await execCapture('sudo', ['-u', 'dietpi', '/usr/local/bin/mupibox/pair_bt.sh', mac], 60000)
     res.json({ ok: r.ok })
   })
 

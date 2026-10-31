@@ -5099,7 +5099,8 @@ app.post('/api/bluetooth/pair', async (req, res) => {
   }
 
   try {
-    await execFileAsync('/usr/local/bin/mupibox/pair_bt.sh', [mac], { timeout: 25000 })
+    // (KN: 60 s - pair_bt.sh looks for the device, pairs and connects, each waited for)
+    await execFileAsync('/usr/local/bin/mupibox/pair_bt.sh', [mac], { timeout: 60000 })
     console.log(`${new Date().toLocaleString()}: [MuPiBox-Server] Paired bluetooth device ${mac}`)
     res.status(200).send('ok')
   } catch (error) {
