@@ -104,6 +104,7 @@ function onMessage(m) {
       if (state) state.item = sameItem(state.item, m.item)
       break
     case 'playback_changed':
+      if (state && state.status !== m.status) log.info(`${new Date().toLocaleString()}: [Soloist] now ${m.status}`)
       if (state) state.status = m.status
       break
     case 'volume_changed':
@@ -139,12 +140,16 @@ function send(cmd) {
   return true
 }
 
-// A command and its command_result (dispatched - not yet done); an error message rejects it.
+// A command and its command_result (dispatched - not yet done); an error message rejects it. Logged with what came
+// back (Julia's box: a pause took 10 taps - where they were lost was not to be seen)
 function command(cmd, timeoutMs = 4000) {
+  const t0 = Date.now()
   return new Promise((resolve, reject) => {
     const done = (fn, v) => {
       clearTimeout(timer)
       waiters.delete(w)
+      const what = fn === resolve ? 'ok' : `failed: ${v?.message ?? v}`
+      log.info(`${new Date().toLocaleString()}: [Soloist] ${cmd.command}${cmd.uri ? ` ${cmd.uri}` : ''} - ${what} (${Date.now() - t0} ms, ${state?.status ?? '-'})`)
       fn(v)
     }
     const w = (m) => {

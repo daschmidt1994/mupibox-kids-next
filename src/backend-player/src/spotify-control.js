@@ -1904,6 +1904,7 @@ function pauseOwnSpotify(why) {
 }
 
 function pause() {
+  log.info(`${now()}: [Player] pause asked (${currentMeta.currentPlayer || '-'})`)
   forgetSpotifyState()
   playPauseRequest++
   // (a start waiting for the token's renewal is not made after a pause - it started the music again)
@@ -2040,6 +2041,7 @@ function stop() {
 }
 
 function play() {
+  log.info(`${now()}: [Player] resume asked (${currentMeta.currentPlayer || '-'})`)
   forgetSpotifyState()
   if (currentMeta.currentPlayer === 'spotify') {
     if (webBlocked()) return log.debug(`${now()}: [Spotify Control] play: Spotify blocks the requests`)
