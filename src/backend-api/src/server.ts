@@ -541,19 +541,23 @@ async function displayReady(): Promise<{ ready: boolean; waiting: string[] }> {
   } catch {
     waiting.push('player')
   }
+  let soloistReady = false
   if (!waiting.includes('player')) {
     // (Soloist: restarted once after the box started - its first play hung; see the player's soloist-local warmUp)
     const soloist = await fetch('http://127.0.0.1:5005/soloist/warming', { signal: AbortSignal.timeout(2000) })
-      .then((r) => r.json() as Promise<{ warming?: boolean }>)
-      .catch(() => ({ warming: false }))
+      .then((r) => r.json() as Promise<{ warming?: boolean; ready?: boolean }>)
+      .catch(() => ({ warming: false, ready: false }))
     if (soloist.warming) waiting.push('soloist')
+    soloistReady = soloist.ready === true
   }
   if (!(await hasSink().catch(() => false))) waiting.push('sound')
   const route = await execFileAsync('ip', ['route', 'show', 'default'], { timeout: 3000 }).catch(() => ({ stdout: '' }))
   if (!String(route.stdout).trim()) waiting.push('network')
   // (the Spotify sign-in lies in mupiboxconfig.json - the server's config.json has the app's id only)
   const spotify = (getMupiboxConfigSync()?.spotify as { refreshToken?: string } | undefined)?.refreshToken
-  if (spotify && !device && !waiting.includes('player')) waiting.push('spotify')
+  // (not while Soloist is logged in: Spotify plays there. Jakob's box: the display's player hung at "Connecting player"
+  // after a start, never retried, and the tiles stayed grey)
+  if (spotify && !device && !soloistReady && !waiting.includes('player')) waiting.push('spotify')
   if (waiting.length) return { ready: false, waiting }
   displayReadySeen = true
   console.log(`${new Date().toLocaleString()}: [display] ready to play, ${Math.round((Date.now() - displayStartedAt) / 1000)} s after the server started`)

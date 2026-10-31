@@ -3534,9 +3534,10 @@ app.get('/playing', (_req, res) => {
 })
 
 // KN: Soloist for the app's page (Einstellungen › Spotify › Soloist): running, found among the account's devices, used
-// KN: the display keeps its tiles grey while Soloist gets its restart after the box started (soloist-local warmUp)
+// KN: the display keeps its tiles grey while Soloist gets its restart after the box started (soloist-local warmUp);
+// ready: Soloist logged in - Spotify plays there, the display's own Spotify player is not needed for that
 app.get('/soloist/warming', (_req, res) => {
-  res.json({ warming: !!soloistName() && soloistLocal.warming() })
+  res.json({ warming: !!soloistName() && soloistLocal.warming(), ready: !!soloistName() && soloistLocal.ready() })
 })
 app.get('/soloist', async (_req, res) => {
   if (soloistName() && soloistLocal.ready()) return res.json({ running: true, name: soloistName(), deviceId: soloistLocal.LOCAL_DEVICE_ID, known: true, inUse: true })
